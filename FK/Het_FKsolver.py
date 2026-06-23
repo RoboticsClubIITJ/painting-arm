@@ -5,7 +5,6 @@ from matplotlib.widgets import Slider
 # --- 1. THE MATHEMATICS ---
 
 def get_matrix(θ_rad, a):
-    """Generates the 3x3 planar DH transformation matrix."""
     c = np.cos(θ_rad)
     s = np.sin(θ_rad)
     return np.array([
@@ -15,7 +14,6 @@ def get_matrix(θ_rad, a):
     ])
 
 def FK_solver(thetas, link_lengths):
-    """Calculates the (x, y) coordinates for EVERY joint to draw the arm."""
     T01 = get_matrix(thetas[0], link_lengths[0])
     T12 = get_matrix(thetas[1], link_lengths[1])
     T23 = get_matrix(thetas[2], link_lengths[2])
@@ -51,6 +49,10 @@ if __name__ == "__main__":
     X, Y = FK_solver(initial_thetas, initial_L)
     arm_line, = ax.plot(X, Y, 'o-', linewidth=4, markersize=8, color='#2c3e50')
     ax.plot(0, 0, 'rs', markersize=10) # Base marker
+    brush_text = ax.text(0.05, 0.95, f"Brush: ({X[-1]:.1f}, {Y[-1]:.1f})", 
+                        transform=ax.transAxes, fontsize=12, fontweight='bold', 
+                        verticalalignment='top', 
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
     # --- Sliders Setup ---
     # Axes arrays: [left, bottom, width, height]
@@ -89,6 +91,7 @@ if __name__ == "__main__":
         
         # 4. Redraw the arm
         arm_line.set_data(X_new, Y_new)
+        brush_text.set_text(f"Brush: ({X_new[-1]:.1f}, {Y_new[-1]:.1f})")
         fig.canvas.draw_idle()
 
     # Link all sliders to the update trigger
