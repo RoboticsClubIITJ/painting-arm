@@ -1,0 +1,425 @@
+import tkinter as tk
+from tkinter import ttk, filedialog
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import cv2
+from scipy.interpolate import splprep, splev
+
+# Dark theme matching reference GUI
+plt.style.use('dark_background')
+
+# ==========================================================
+# === PHYSICAL PARAMETERS & ROBOT GEOMETRY ===
+# ==========================================================
+L1 = 15.0  
+L2 = 15.0  
+L3 = 3.0   
+L_TUPLE = (L1, L2, L3)
+
+JOINT_LIMITS = [
+    (np.radians(-180), np.radians(180)),  
+    (np.radians(-155), np.radians(155)),  
+    (np.radians(-180), np.radians(180))   
+]
+MIN_LIMITS = np.array([j[0] for j in JOINT_LIMITS])
+MAX_LIMITS = np.array([j[1] for j in JOINT_LIMITS])
+
+v_cart   = 4.0   # Realtime safe drawing speed (cm/s)
+v_travel = 15.0  # Safe travel speed (cm/s)
+
+FPS = 60
+DT = 1.0 / FPS
+
+# ==========================================================
+# === KINEMATICS & IK SOLVER ===
+# ==========================================================
+def forward_kinematics(q, L=L_TUPLE):
+    l1, l2, l3 = L
+    t1, t2, t3 = q[0], q[1], q[2]
+    t12, t123 = t1 + t2, t1 + t2 + t3
+    x = l1 * np.cos(t1) + l2 * np.cos(t12) + l3 * np.cos(t123)
+    y = l1 * np.sin(t1) + l2 * np.sin(t12) + l3 * np.sin(t123)
+    return np.array([x, y])
+
+def compute_jacobian_position(q, L=L_TUPLE):
+    l1, l2, l3 = L
+    t1, t2, t3 = q[0], q[1], q[2]
+    t12, t123 = t1 + t2, t1 + t2 + t3
+    s1, s12, s123 = np.sin(t1), np.sin(t12), np.sin(t123)
+    c1, c12, c123 = np.cos(t1), np.cos(t12), np.cos(t123)
+    
+    return np.array([
+        [-l1 * s1 - l2 * s12 - l3 * s123,  -l2 * s12 - l3 * s123,  -l3 * s123],
+        [ l1 * c1 + l2 * c12 + l3 * c123,   l2 * c12 + l3 * c123,   l3 * c123]
+    ])
+
+def ik_2d_position_dls(target_pos, q_init, L=L_TUPLE, damping=0.1, max_iter=40, tol=1e-3):
+    q = np.array(q_init, dtype=float)
+    I = np.identity(2)
+    lam_sq = damping ** 2
+
+    for _ in range(max_iter):
+        curr_pos = forward_kinematics(q, L)
+        error = target_pos - curr_pos
+        
+        if np.linalg.norm(error) < tol:
+            return q, True
+
+        J = compute_jacobian_position(q, L)
+        A = (J @ J.T) + lam_sq * I
+        dq = J.T @ np.linalg.solve(A, error)
+        
+        dq = np.clip(dq, -0.08, 0.08)
+        q = np.clip(q + dq, MIN_LIMITS, MAX_LIMITS)
+
+    return q, False
+
+def quintic_s(tau):
+    tau = np.clip(tau, 0.0, 1.0)
+    return 10*tau**3 - 15*tau**4 + 6*tau**5
+
+# ==========================================================
+# === SKELETONIZATION & CONTINUOUS PATH RECOVERY ===
+# ==========================================================
+def cv2_skeletonize(img_thresh):
+    skel = np.zeros(img_thresh.shape, np.uint8)
+    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    img = img_thresh.copy()
+    
+    while True:
+        eroded = cv2.erode(img, element)
+        temp = cv2.dilate(eroded, element)
+        cv2.subtract(img, temp, temp)
+        cv2.bitwise_or(skel, temp, skel)
+        img = eroded.copy()
+        if cv2.countNonZero(img) == 0:
+            break
+            
+    return skel
+
+def extract_continuous_sketch_paths(img):
+    """Bridge gaps in broken lines to form long continuous curves."""
+    # Pre-processing: Adaptive Thresholding + Morphological Close to connect broken edges
+    blur = cv2.GaussianBlur(img, (5, 5), 0)
+    thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+    
+    skel = cv2_skeletonize(thresh)
+    contours, _ = cv2.findContours(skel, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+    continuous_paths = []
+    for cnt in contours:
+        # Filter out tiny noise dots/fragments
+        if len(cnt) < 8:
+            continue
+        
+        pts = cnt.reshape(-1, 2)
+        
+        # Remove repeated/too close waypoints
+        distances = np.sqrt(np.sum(np.diff(pts, axis=0)**2, axis=1))
+        keep = np.insert(distances > 0.5, 0, True)
+        pts = pts[keep]
+
+        if len(pts) < 6:
+            continuous_paths.append(pts)
+            continue
+
+        try:
+            # Spline interpolation to smooth out jagged breaks
+            tck, u = splprep([pts[:, 0], pts[:, 1]], s=2.0, k=min(3, len(pts)-1))
+            u_new = np.linspace(0, 1, max(10, len(pts) // 2))
+            x_new, y_new = splev(u_new, tck)
+            continuous_paths.append(np.column_stack((x_new, y_new)))
+        except Exception:
+            continuous_paths.append(pts)
+
+    return continuous_paths
+
+def optimize_paths(raw_paths, start_pos):
+    if not raw_paths:
+        return []
+        
+    unvisited = list(raw_paths)
+    optimized = []
+    curr_pt = np.array(start_pos)
+
+    while unvisited:
+        best_idx, best_dist, reverse = -1, float('inf'), False
+        for idx, path in enumerate(unvisited):
+            d_start = np.hypot(*(path[0] - curr_pt))
+            d_end = np.hypot(*(path[-1] - curr_pt))
+            if d_start < best_dist:
+                best_dist, best_idx, reverse = d_start, idx, False
+            if d_end < best_dist:
+                best_dist, best_idx, reverse = d_end, idx, True
+
+        chosen = unvisited.pop(best_idx)
+        if reverse:
+            chosen = chosen[::-1]
+        optimized.append(chosen)
+        curr_pt = chosen[-1]
+
+    return optimized
+
+# ==========================================================
+# === TRAJECTORY GENERATION ENGINE ===
+# ==========================================================
+def generate_exact_trajectory(paths_list, q_init):
+    traj_q, traj_draw = [], []
+    q_prev = q_init.copy()
+    
+    curr_pos = forward_kinematics(q_prev)
+
+    for path in paths_list:
+        start_pt = path[0]
+        dist_air = np.hypot(start_pt[0] - curr_pos[0], start_pt[1] - curr_pos[1])
+
+        # Air Travel Motion
+        if dist_air > 0.1:
+            n_frames = max(3, int(dist_air / (v_travel * DT)))
+            for s in range(n_frames):
+                tau = quintic_s(s / max(1, n_frames - 1))
+                target = curr_pos + tau * (start_pt - curr_pos)
+                q_sol, _ = ik_2d_position_dls(target, q_prev)
+                traj_q.append(q_sol)
+                traj_draw.append(False)
+                q_prev = q_sol
+            curr_pos = start_pt.copy()
+
+        # Drawing Motion
+        for i in range(len(path) - 1):
+            p1 = path[i]
+            p2 = path[i+1]
+            dist = np.hypot(p2[0] - p1[0], p2[1] - p1[1])
+            if dist < 1e-4:
+                continue
+
+            n_frames = max(2, int(dist / (v_cart * DT)))
+
+            for s in range(n_frames):
+                tau = quintic_s(s / max(1, n_frames - 1))
+                target = p1 + tau * (p2 - p1)
+                q_sol, _ = ik_2d_position_dls(target, q_prev)
+                traj_q.append(q_sol)
+                traj_draw.append(True)
+                q_prev = q_sol
+
+            curr_pos = p2.copy()
+
+    return np.array(traj_q), traj_draw
+
+# ==========================================================
+# === APPLICATION GUI ===
+# ==========================================================
+class FixedPathDrawingApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Drawing Simulation (Continuous Sketch & Smooth Waypoints)")
+        self.root.configure(bg="#121212")
+
+        self.q_home = np.array([np.radians(50), np.radians(-90), np.radians(40)])
+        self.q_curr = self.q_home.copy()
+
+        self.setup_ui()
+        self.setup_plots()
+
+        self.is_running = False
+        self.traj_q = []; self.traj_dq = []; self.traj_draw = []
+        self.traj_idx = 0
+        self.speed_scale = 0.8
+
+        self.run_loop()
+
+    def setup_ui(self):
+        top_frame = ttk.Frame(self.root)
+        top_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
+
+        btn_upload = tk.Button(top_frame, text="Upload Image & Run", command=self.process_image, bg="#2d89ef", fg="white", font=("Arial", 10, "bold"))
+        btn_upload.pack(side=tk.LEFT, padx=5)
+
+        btn_reset = tk.Button(top_frame, text="Reset Engine", command=self.reset_engine, bg="#e74c3c", fg="white", font=("Arial", 10, "bold"))
+        btn_reset.pack(side=tk.LEFT, padx=5)
+
+        bot_frame = tk.Frame(self.root, bg="#121212")
+        bot_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=5)
+
+        tk.Label(bot_frame, text="Speed", fg="white", bg="#121212", font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
+        self.slider = tk.Scale(bot_frame, from_=0.1, to=2.0, resolution=0.1, orient=tk.HORIZONTAL, bg="#121212", fg="white", highlightthickness=0, command=self.update_speed)
+        self.slider.set(0.8)
+        self.slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        self.status_label = tk.Label(bot_frame, text="READY", fg="#00ffcc", bg="#121212", font=("Consolas", 10))
+        self.status_label.pack(side=tk.RIGHT, padx=10)
+
+    def update_speed(self, val):
+        self.speed_scale = float(val)
+
+    def setup_plots(self):
+        self.fig = plt.figure(figsize=(14, 7), facecolor='#0d0d0d')
+        gs = self.fig.add_gridspec(3, 2, width_ratios=[1.3, 1])
+
+        self.ax_arm = self.fig.add_subplot(gs[:, 0], facecolor='#050505')
+        self.ax_arm.set_title("Drawing Simulation (arm base = •, canvas = upper-right quadrant)", color='white', fontsize=11, pad=10)
+        self.ax_arm.set_aspect('equal')
+        self.ax_arm.set_xlim(-5, 35)
+        self.ax_arm.set_ylim(-5, 30)
+        self.ax_arm.grid(True, color='#222222', linestyle='--')
+
+        self.ax_v1 = self.fig.add_subplot(gs[0, 1], facecolor='#080808')
+        self.ax_v2 = self.fig.add_subplot(gs[1, 1], facecolor='#080808')
+        self.ax_v3 = self.fig.add_subplot(gs[2, 1], facecolor='#080808')
+
+        for ax, label in zip([self.ax_v1, self.ax_v2, self.ax_v3], ['w joint 1', 'w joint 2', 'w joint 3']):
+            ax.set_ylabel(label, color='#888888', fontsize=8)
+            ax.tick_params(colors='#555555', labelsize=7)
+            ax.grid(True, color='#1c1c1c', linestyle=':')
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        self.arm_line, = self.ax_arm.plot([], [], 'o-', lw=4, color='#3498db', zorder=4)
+        self.forearm_line, = self.ax_arm.plot([], [], 'o-', lw=4, color='#2ecc71', zorder=4)
+        self.wrist_line, = self.ax_arm.plot([], [], 'o-', lw=3, color='#e67e22', zorder=5)
+        self.ee_point, = self.ax_arm.plot([], [], 'o', markersize=6, color='#f1c40f', zorder=6)
+
+        self.preview_path_lines = []
+        self.drawn_lines = []
+        self.curr_stroke_x, self.curr_stroke_y = [], []
+        self.curr_line, = self.ax_arm.plot([], [], '-', color='#ff4757', lw=1.5, zorder=3)
+
+        self.v_lines = [
+            self.ax_v1.plot([], [], color='#ff4757', lw=1)[0],
+            self.ax_v2.plot([], [], color='#1e90ff', lw=1)[0],
+            self.ax_v3.plot([], [], color='#2ed573', lw=1)[0]
+        ]
+
+        self.draw_arm()
+
+    def reset_engine(self):
+        self.is_running = False
+        self.q_curr = self.q_home.copy()
+        self.traj_q = []; self.traj_dq = []; self.traj_draw = []
+        self.traj_idx = 0
+
+        for line in self.preview_path_lines:
+            line.remove()
+        self.preview_path_lines.clear()
+
+        for line in self.drawn_lines:
+            line.remove()
+        self.drawn_lines.clear()
+
+        self.curr_stroke_x.clear(); self.curr_stroke_y.clear()
+        self.curr_line.set_data([], [])
+
+        for vl in self.v_lines:
+            vl.set_data([], [])
+
+        self.status_label.config(text="RESET COMPLETE")
+        self.draw_arm()
+
+    def process_image(self):
+        if self.is_running:
+            return
+
+        filepath = filedialog.askopenfilename(filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp")])
+        if not filepath:
+            return
+
+        self.reset_engine()
+        img = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+        raw_paths = extract_continuous_sketch_paths(img)
+
+        # Scale into Canvas Area
+        h, w = img.shape
+        max_dim = max(w, h)
+        scale = 16.0 / max_dim
+        
+        offset_x = 10.0 + (16.0 - w * scale) / 2.0
+        offset_y = 6.0 + (16.0 - h * scale) / 2.0
+
+        cartesian_paths = []
+        for path in raw_paths:
+            mapped_pts = []
+            for px, py in path:
+                mx = offset_x + px * scale
+                my = offset_y + (h - py) * scale
+                mapped_pts.append([mx, my])
+            cartesian_paths.append(np.array(mapped_pts))
+
+        home_pos = forward_kinematics(self.q_curr)
+        optimized_paths = optimize_paths(cartesian_paths, home_pos)
+
+        # Display Waypoint Sketch Paths (Target)
+        for path in optimized_paths:
+            l, = self.ax_arm.plot(path[:, 0], path[:, 1], color='#555555', linestyle='--', lw=0.9, zorder=2)
+            self.preview_path_lines.append(l)
+        self.canvas.draw_idle()
+
+        self.traj_q, self.traj_draw = generate_exact_trajectory(optimized_paths, self.q_curr)
+        if len(self.traj_q) == 0:
+            return
+
+        self.traj_dq = np.gradient(self.traj_q, DT, axis=0)
+        self.is_running = True
+
+    def draw_arm(self):
+        t1, t2, t3 = self.q_curr
+        p1 = np.array([L1 * np.cos(t1), L1 * np.sin(t1)])
+        p2 = p1 + np.array([L2 * np.cos(t1 + t2), L2 * np.sin(t1 + t2)])
+        p3 = p2 + np.array([L3 * np.cos(t1 + t2 + t3), L3 * np.sin(t1 + t2 + t3)])
+
+        self.arm_line.set_data([0, p1[0]], [0, p1[1]])
+        self.forearm_line.set_data([p1[0], p2[0]], [p1[1], p2[1]])
+        self.wrist_line.set_data([p2[0], p3[0]], [p2[1], p3[1]])
+        self.ee_point.set_data([p3[0]], [p3[1]])
+
+        self.canvas.draw_idle()
+
+    def run_loop(self):
+        if self.is_running and self.traj_idx < len(self.traj_q):
+            step_count = max(1, int(1 * self.speed_scale))
+            for _ in range(step_count):
+                if self.traj_idx >= len(self.traj_q):
+                    break
+
+                self.q_curr = self.traj_q[self.traj_idx]
+                p3 = forward_kinematics(self.q_curr)
+
+                if self.traj_draw[self.traj_idx]:
+                    self.curr_stroke_x.append(p3[0])
+                    self.curr_stroke_y.append(p3[1])
+                    self.curr_line.set_data(self.curr_stroke_x, self.curr_stroke_y)
+                else:
+                    if len(self.curr_stroke_x) > 0:
+                        line, = self.ax_arm.plot(self.curr_stroke_x, self.curr_stroke_y, '-', color='#ff4757', lw=1.5, zorder=3)
+                        self.drawn_lines.append(line)
+                        self.curr_stroke_x.clear(); self.curr_stroke_y.clear()
+
+                self.traj_idx += 1
+
+            self.draw_arm()
+
+            t_arr = np.arange(self.traj_idx) * DT
+            for j, ax in enumerate([self.ax_v1, self.ax_v2, self.ax_v3]):
+                self.v_lines[j].set_data(t_arr, self.traj_dq[:self.traj_idx, j])
+                ax.set_xlim(0, max(1, len(self.traj_q) * DT))
+                ax.set_ylim(np.min(self.traj_dq[:, j]) - 0.05, np.max(self.traj_dq[:, j]) + 0.05)
+
+            ee_pos = forward_kinematics(self.q_curr)
+            self.status_label.config(text=f"Drawing... | Tool Tip=({ee_pos[0]:.2f}, {ee_pos[1]:.2f}) | Frame {self.traj_idx}/{len(self.traj_q)}")
+
+        elif self.is_running:
+            self.is_running = False
+            self.status_label.config(text="DRAWING COMPLETE")
+
+        self.root.after(16, self.run_loop)
+
+if __name__ == '__main__':
+    root = tk.Tk()
+    root.protocol("WM_DELETE_WINDOW", lambda: (root.destroy(), plt.close('all')))
+    app = FixedPathDrawingApp(root)
+    root.mainloop()
