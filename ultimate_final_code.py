@@ -497,7 +497,7 @@ class Planar3DOFSimApp:
         self.root.update()
         
         q_sim = self.q_current.copy()
-        pause_frames = int(2.0 * FPS) # 2 seconds of frames
+        pause_frames = int(0.2 * FPS) # Fast pause (0.2 seconds)
         
         for i, path in enumerate(cv_paths):
             curr_x, curr_y = forward_kinematics_2d(q_sim)
@@ -511,7 +511,7 @@ class Planar3DOFSimApp:
                 if i > 0:
                     self.traj_q.extend([q_sim] * pause_frames)
                     self.traj_draw_flags.extend([False] * pause_frames)
-                    self.traj_pen_status.extend(["LIFTING PEN (WAIT 2s)"] * pause_frames)
+                    self.traj_pen_status.extend(["LIFTING PEN"] * pause_frames)
 
                 # 2. Travel smoothly
                 self.traj_q.extend(travel_traj)
@@ -522,7 +522,7 @@ class Planar3DOFSimApp:
             # 3. Lower Pen Pause
             self.traj_q.extend([q_sim] * pause_frames)
             self.traj_draw_flags.extend([False] * pause_frames)
-            self.traj_pen_status.extend(["LOWERING PEN (WAIT 2s)"] * pause_frames)
+            self.traj_pen_status.extend(["LOWERING PEN"] * pause_frames)
 
             # --- Pen Down & Draw ---
             draw_traj = generate_continuous_trajectory(path, q_sim, v_max=MAX_LINEAR_SPEED)
@@ -553,9 +553,8 @@ class Planar3DOFSimApp:
         max_start_time = max(0.0, total_duration - REVIEW_WINDOW)
         self.timeline_slider.config(to=max_start_time)
         
-        # Enforce fixed limits for all Y-axes
         for ax in self.vel_axes:
-            ax.set_ylim(-0.4, 0.4)
+            ax.set_ylim(-0.8, 0.8)
         
         self.is_running = True
         self.status_var.set("STATUS: EXECUTING...")
