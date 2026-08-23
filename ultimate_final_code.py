@@ -10,16 +10,16 @@ import scipy.signal as signal
 # ==========================================================
 # === PHYSICAL PARAMETERS & LIMITS ===
 # ==========================================================
-L1 = 15.5
-L2 = 12.0
+L1 = 15.95
+L2 = 15.05
 L3 = 5.0
 L_TUPLE = (L1, L2, L3)
 MAX_REACH = L1 + L2 + L3
 
 JOINT_LIMITS = [
-    (np.radians(-120), np.radians(120)),  
-    (np.radians(-120), np.radians(120)),  
-    (np.radians(-120), np.radians(120))   
+    (np.radians(-135), np.radians(135)),  
+    (np.radians(-130), np.radians(130)),  
+    (np.radians(-130), np.radians(130))   
 ]
 
 MAX_LINEAR_SPEED = 15.0 # cm/s (Desired Task Space Speed)
