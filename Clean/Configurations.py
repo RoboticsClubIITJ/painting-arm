@@ -1,0 +1,64 @@
+# Physical parameters, kinematic limits, and tuning constants for the 3-DOF planar drawing arm.
+import numpy as np
+# Link Geometry
+L1 = 15.0
+L2 = 12.0
+L3 = 5.0
+L_TUPLE = (L1, L2, L3)
+MAX_REACH = L1 + L2 + L3
+
+# Joint Limits
+JOINT_LIMITS = [
+    (np.radians(-120), np.radians(120)),   # Shoulder
+    (np.radians(-150), np.radians(150)),   # Elbow
+    (np.radians(-150), np.radians(150)),   # Wrist
+]
+
+# Task-Space / Joint-Space Limits
+MAX_LINEAR_SPEED = 15.0       # cm/s
+MAX_JOINT_VEL = 1.0           # rad/s
+MAX_JOINT_ACC = 0.2           # rad/s^2
+
+# Timing
+FPS = 30
+DT = 1.0 / FPS
+REVIEW_WINDOW = 5.0           # seconds
+
+# IK Solver - Damped Least Squares
+IK_MAX_ITER = 100
+IK_TOL = 1e-2
+IK_DAMPING = 0.05
+IK_MAX_STEP = 0.30            # rad per iteration
+
+# Trajectory Shaping
+SAFE_DECEL_RATE = 3.5         # cm/s^2
+MIN_SPEED_FLOOR = 0.5         # cm/s
+NEAR_TARGET_DIST = 0.1        # cm
+NEAR_TARGET_SPEED_FLOOR = 0.01
+FAR_TARGET_SPEED_FLOOR_FRAC = 0.05
+TRAVEL_SPEED_MULT = 1.5
+PAUSE_DURATION = 0.2          # seconds
+
+# Savitzky-Golay Filtering
+SG_WINDOW_LENGTH = 15
+SG_POLYORDER = 3
+
+# XDoG Vision Pipeline
+XDOG_SIGMA = 1.4
+XDOG_K_SIGMA = 1.6
+XDOG_EPSILON = 0.01
+XDOG_PHI = 20
+XDOG_GAMMA = 0.98
+XDOG_AUTO_TUNE = True
+
+# Vision / Contour Processing
+MIN_CONTOUR_ARC_LEN = 12.0
+MIN_CONTOUR_POINTS = 4
+SPLINE_SMOOTHING = 2.0
+APPROX_POLY_EPSILON = 1.0
+
+# Image -> Robot Workspace Mapping
+TARGET_CANVAS_W = 20.0
+TARGET_CANVAS_H = 20.0
+CANVAS_CENTER_X = 10.0 + (TARGET_CANVAS_W / 2.0)
+CANVAS_CENTER_Y = 0.0
