@@ -6,6 +6,9 @@ This module is orchestration only: it wires together vision.py
 trajectory.py (velocity-profiled joint trajectories), plus the
 animation loop and Savitzky-Golay post-smoothing. No CV or kinematics
 math lives here anymore.
+
+NAYA: dynamixel_controller.py se DynamixelArm bhi wire kiya hai, taaki
+sim ke saath physical motors bhi move hon.
 """
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -24,6 +27,7 @@ from Configurations import (
 from Kinematics import FK, arm_link_positions, clip_to_joint_limits
 from Trajectory import generate_continuous_trajectory
 from Vision import image_to_robot_paths
+from dynamixel_controller import DynamixelArm   # <-- NAYA
 
 
 class Planar3DOFSimApp:
@@ -42,6 +46,14 @@ class Planar3DOFSimApp:
         self.traj_idx = 0
         self.is_running = False
         self.stroke_index = 0
+
+        # ---- NAYA: hardware arm connect karo ----
+        # Agar port connect nahi hota, app crash nahi hogi - sim-only chalegi.
+        self.arm = None
+        try:
+            self.arm = DynamixelArm()
+        except Exception as e:
+            print(f"[HARDWARE] Dynamixel arm connect nahi hui, sim-only mode: {e}")
 
         self.setup_gui()
         self.setup_plots()
@@ -100,6 +112,10 @@ class Planar3DOFSimApp:
 
         self.timeline_label = ttk.Label(review_frame, text="Window: 0.0s - 5.0s")
         self.timeline_label.pack(pady=(0, 5))
+
+        # ---- NAYA: hardware status dikhane ke liye ----
+        hw_text = "HARDWARE: CONNECTED" if self.arm else "HARDWARE: NOT CONNECTED (sim-only)"
+        ttk.Label(control_frame, text=hw_text, font=("Arial", 9, "italic")).pack(pady=(0, 5))
 
         self.status_var = tk.StringVar(value="STATUS: IDLE")
         ttk.Label(control_frame, textvariable=self.status_var, font=("Arial", 10, "bold")).pack(pady=10)
@@ -352,6 +368,10 @@ class Planar3DOFSimApp:
             pen_status = self.traj_pen_status[self.traj_idx]
             p3 = self.draw_arm()
 
+            # ---- NAYA: physical motors ko bhi wahi angle bhejo jo sim mein dikh raha hai ----
+            if self.arm:
+                self.arm.move_to_angles(self.q_current)
+
             self.pen_status_text.set_text(f"Z-AXIS: {pen_status}")
 
             if is_drawing:
@@ -372,8 +392,15 @@ class Planar3DOFSimApp:
             t_min = max(0, current_time - REVIEW_WINDOW)
             t_max = max(REVIEW_WINDOW, current_time)
 
+            # ---- FIX: sirf visible window ka data plot karo, poori history nahi -
+            # warna lambi trajectory pe har frame heavier hota jaata hai aur
+            # asli drawing speed slow padne lagti hai (regardless of MAX_LINEAR_SPEED).
+            window_start_idx = max(0, self.traj_idx + 1 - int(REVIEW_WINDOW * FPS) - 5)
+            t_window = t_arr[window_start_idx:]
+            dq_window = self.traj_dq[window_start_idx:self.traj_idx + 1]
+
             for i, ax in enumerate(self.vel_axes):
-                self.v_lines[i].set_data(t_arr, self.traj_dq[:self.traj_idx + 1, i])
+                self.v_lines[i].set_data(t_window, dq_window[:, i])
                 ax.set_xlim(t_min, t_max)
 
             self.timeline_var.set(t_min)
@@ -387,3 +414,10 @@ class Planar3DOFSimApp:
             self.pen_status_text.set_text("DRAWING COMPLETE")
             self.status_var.set("STATUS: COMPLETE. USE SLIDER TO REVIEW.")
             self.timeline_slider.state(['!disabled'])
+
+    def on_close(self):
+        # ---- NAYA: band karte waqt torque off + port close, motors safe rahenge ----
+        if self.arm:
+            self.arm.close()
+        self.root.destroy()
+        plt.close('all')
