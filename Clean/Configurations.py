@@ -1,17 +1,17 @@
 # Physical parameters, kinematic limits, and tuning constants for the 3-DOF planar drawing arm.
 import numpy as np
 # Link Geometry
-L1 = 15.0
-L2 = 12.0
-L3 = 5.0
+L1 = 15.9
+L2 = 15.05
+L3 = 10.0
 L_TUPLE = (L1, L2, L3)
 MAX_REACH = L1 + L2 + L3
 
 # Joint Limits
 JOINT_LIMITS = [
-    (np.radians(-120), np.radians(120)),   # Shoulder
-    (np.radians(-150), np.radians(150)),   # Elbow
-    (np.radians(-150), np.radians(150)),   # Wrist
+    (np.radians(-135), np.radians(135)),   # Shoulder
+    (np.radians(-130), np.radians(130)),   # Elbow
+    (np.radians(-130), np.radians(130)),   # Wrist
 ]
 
 # Task-Space / Joint-Space Limits
