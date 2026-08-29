@@ -10,6 +10,9 @@ BAUDRATE = 1000000
 DEVICENAME = 'COM5'
 PROTOCOL_VERSION = 2.0
 
+ADDR_OPERATING_MODE = 11        # Operating Mode Address
+EXT_POSITION_CONTROL_MODE = 4   # Value for Extended Position Control
+
 ADDR_TORQUE_ENABLE = 64
 ADDR_GOAL_POSITION = 116
 ADDR_PRESENT_POSITION = 132
@@ -20,6 +23,12 @@ L2 = 150.50
 L3 = 110.930  
 L_TUPLE = (L1, L2, L3)
 
+# --- Relative Safety Limits ---
+# Calculated from your manual run: (Limit_Tick - Zero_Tick)
+# This prevents you from having to manually calibrate limits every time.
+REL_LIMIT_1 = [-1575, -1456, -1340] # Corresponding to your previous "MAX" inputs
+REL_LIMIT_2 = [1468, 1256, 1396]    # Corresponding to your previous "MIN" inputs
+
 portHandler = dxl.PortHandler(DEVICENAME)
 packetHandler = dxl.PacketHandler(PROTOCOL_VERSION)
 
@@ -27,7 +36,7 @@ if not portHandler.openPort() or not portHandler.setBaudRate(BAUDRATE):
     print("Failed to open port or set baudrate. Check COM port and power.")
     quit()
 
-# --- SDK Helper Functions (Signed Integer Fixes) ---
+# --- SDK Helper Functions ---
 def read_signed_position(dxl_id):
     """Reads position and converts 32-bit unsigned to signed integer."""
     pos, _, _ = packetHandler.read4ByteTxRx(portHandler, dxl_id, ADDR_PRESENT_POSITION)
@@ -46,8 +55,17 @@ def set_torque(enable):
     for dxl_id in DXL_IDs:
         packetHandler.write1ByteTxRx(portHandler, dxl_id, ADDR_TORQUE_ENABLE, 1 if enable else 0)
 
-# --- 1. Calibration Phase ---
-set_torque(False)
+def set_operating_mode(mode):
+    for dxl_id in DXL_IDs:
+        packetHandler.write1ByteTxRx(portHandler, dxl_id, ADDR_OPERATING_MODE, mode)
+
+# --- 1. Initialization and Calibration Phase ---
+set_torque(False) # Torque MUST be disabled to change operating mode
+
+print("\n--- CONFIGURING EXTENDED POSITION CONTROL ---")
+set_operating_mode(EXT_POSITION_CONTROL_MODE)
+print("Extended Position Control (Multi-turn) Enabled.")
+
 print("\n--- ZERO CALIBRATION ---")
 input("Move the ENTIRE arm straight along the X-axis (0 radians). Press Enter...")
 zero_ticks = []
@@ -55,22 +73,20 @@ for dxl_id in DXL_IDs:
     zero_ticks.append(read_signed_position(dxl_id))
 print(f"Zero offsets recorded: {zero_ticks}")
 
-print("\n--- LIMIT CALIBRATION ---")
-max_ticks = [644, 1072, 842]
-min_ticks = [3783, 3852, 3616]
+print("\n--- APPLYING RELATIVE SAFETY LIMITS ---")
+max_ticks = []
+min_ticks = []
 
-# for i, dxl_id in enumerate(DXL_IDs):
-#     print(f"\nCalibrating limits for Servo ID {dxl_id}:")
+for i, dxl_id in enumerate(DXL_IDs):
+    # Calculate absolute limits based on the current zero position
+    limit_a = zero_ticks[i] + REL_LIMIT_1[i]
+    limit_b = zero_ticks[i] + REL_LIMIT_2[i]
     
-#     input(f"  -> Move Servo {dxl_id} to its MAXIMUM positive limit. Press Enter...")
-#     max_ticks[i] = read_signed_position(dxl_id)
-#     print(f"  Recorded MAX limit: {max_ticks[i]}")
-    
-#     input(f"  -> Move Servo {dxl_id} to its MINIMUM negative limit. Press Enter...")
-#     min_ticks[i] = read_signed_position(dxl_id)
-#     print(f"  Recorded MIN limit: {min_ticks[i]}")
+    max_ticks.append(limit_a)
+    min_ticks.append(limit_b)
+    print(f"Servo {dxl_id} limits set to: {limit_a} and {limit_b}")
 
-time.sleep(5)
+time.sleep(2)
 set_torque(True)
 print("\nTorque ENABLED. Arm is locked and ready.")
 
@@ -128,7 +144,7 @@ def go_to_xy_3dof(target_x, target_y, current_angles):
         should_invert = (i == 2)
         goal_tick = radians_to_ticks(q_target[i], zero_ticks[i], invert=should_invert)
         
-        # Enforce independent limits
+        # Enforce independent limits based on relative calculation
         safe_max = max(max_ticks[i], min_ticks[i])
         safe_min = min(max_ticks[i], min_ticks[i])
         clamped_tick = max(min(goal_tick, safe_max), safe_min)
@@ -145,7 +161,6 @@ def go_to_xy_3dof(target_x, target_y, current_angles):
 current_joint_angles = [0.0, 0.0, 0.0]
 
 while True:
-
     try:
         cmd = input("\nCommand ('z'=zero, 'g'=go to XY, 'q'=quit): ").strip().lower()
         
@@ -173,7 +188,7 @@ while True:
             write_signed_position(dxl_id, zero_ticks[i])
         current_joint_angles = [0.0, 0.0, 0.0]
         print("Returned to ZERO position.")
-        time.sleep(10)
+        time.sleep(5)
         set_torque(False)
-        print(f"\nTorque disabled. Exiting due to error.")
+        print(f"\nTorque disabled. Exiting due to {e}.")
         break
