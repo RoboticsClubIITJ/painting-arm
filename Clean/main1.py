@@ -1,5 +1,5 @@
 import tkinter as tk
-from alag_file import Planar3DOFSimApp
+from Clean.Pen_up_down import Planar3DOFSimApp
 
 def main():
     root = tk.Tk()
