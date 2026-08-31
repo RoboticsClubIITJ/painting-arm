@@ -3,9 +3,9 @@ import math
 import numpy as np
 import dynamixel_sdk as dxl
 import time
-from Dynamixel.Trajectory import generate_continuous_trajectory
-from Dynamixel.Configurations import MAX_LINEAR_SPEED, FPS
-from Dynamixel.Kinematics import ik_fast_dls
+from Trajectory import generate_continuous_trajectory
+from Configurations import MAX_LINEAR_SPEED, FPS
+from Kinematics import ik_fast_dls
 
 # --- Configuration ---
 DXL_IDs = [0, 1, 2] # Shoulder (XM540), Elbow (XM430), Wrist (XM430)

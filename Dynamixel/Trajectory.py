@@ -4,12 +4,12 @@ Continuous task-space trajectory generation with kinematic limits.
 This is the core planning loop: for a polyline of task-space points, it steps forward in distance one simulation frame (DT) at a time, computing a desired speed from a bell-shaped velocity profile capped by a look-ahead braking curve, then clamps that speed so every joint stays within MAX_JOINT_VEL and MAX_JOINT_ACC (via the Jacobian at the current pose). Each output q is one animation frame.
 """
 import numpy as np
-from Dynamixel.Configurations import (
+from Configurations import (
     MAX_LINEAR_SPEED, MAX_JOINT_VEL, MAX_JOINT_ACC, DT,
     SAFE_DECEL_RATE, MIN_SPEED_FLOOR, NEAR_TARGET_DIST,
     NEAR_TARGET_SPEED_FLOOR, FAR_TARGET_SPEED_FLOOR_FRAC,
 )
-from Dynamixel.Kinematics import ik_fast_dls, compute_jacobian, damped_pseudo_inverse
+from Kinematics import ik_fast_dls, compute_jacobian, damped_pseudo_inverse
 
 def get_interpolated_point(points, cum_dist, current_segment, target_dist):
     # Linearly interpolate a point at `target_dist` along the polyline, within `current_segment`.
