@@ -1,11 +1,16 @@
 import os
 import math
+import cv2 # REMOVE THIS LATER
 import numpy as np
 import dynamixel_sdk as dxl
 import time
-from Trajectory import generate_continuous_trajectory
-from Configurations import MAX_LINEAR_SPEED, FPS
-from Kinematics import ik_fast_dls
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Dynamixel.Trajectory import generate_continuous_trajectory
+from Dynamixel.Configurations import MAX_LINEAR_SPEED, FPS
+from Dynamixel.Kinematics import ik_fast_dls
+from Dynamixel.cv import *
+# import Dynamixel.gui as gui
 
 # --- Configuration ---
 DXL_IDs = [0, 1, 2] # Shoulder (XM540), Elbow (XM430), Wrist (XM430)
@@ -167,15 +172,24 @@ while True:
                 print("Invalid input. Please enter numeric values.")
                 
         elif cmd == 't':
-            print("Drawing hardcoded test path...")
-            test_path = [
-                (20.0, 10.0),
-                (20.0, 0.0),
-                (30.0, 0.0),
-                (30.0, 10.0),
-                (20.0, 10.0),
-            ]
-            current_joint_angles = follow_path(test_path, current_joint_angles)
+            print("Processing image...")
+            raw_image = cv2.imread('image.png', cv2.IMREAD_GRAYSCALE)
+            
+            if raw_image is None:
+                print("Image not found! Check the file path.")
+            else:
+                cv_paths = image_to_robot_paths(raw_image)
+                print(f"Drawing {len(cv_paths)} separate strokes...")
+                
+                for i, path in enumerate(cv_paths):
+                    print(f"Executing stroke {i+1}/{len(cv_paths)}...")
+                    
+                    # Travel to the starting coordinate of the new stroke
+                    start_x, start_y = path[0]
+                    current_joint_angles = go_to_xy_3dof(start_x, start_y, current_joint_angles)
+                    
+                    # Trace the contour smoothly
+                    current_joint_angles = follow_path(path, current_joint_angles)
 
     except (KeyboardInterrupt, Exception) as e:
         for i, dxl_id in enumerate(DXL_IDs):

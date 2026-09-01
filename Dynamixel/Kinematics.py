@@ -1,5 +1,5 @@
 import numpy as np
-from Configurations import L_TUPLE, JOINT_LIMITS, MAX_REACH, IK_MAX_ITER, IK_TOL, IK_DAMPING, IK_MAX_STEP
+from Dynamixel.Configurations import L_TUPLE, JOINT_LIMITS, MAX_REACH, IK_MAX_ITER, IK_TOL, IK_DAMPING, IK_MAX_STEP
 
 def FK(q, L=L_TUPLE):
     # End-effector (pen tip) x, y position for joint angles q.
