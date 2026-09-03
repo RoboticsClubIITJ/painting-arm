@@ -1,18 +1,24 @@
 """
-Tkinter + matplotlib GUI for the 3-DOF drawing arm simulator.
+Tkinter + matplotlib GUI for the 3-DOF drawing arm.
 
-This module is orchestration only: it wires together vision.py
-(image -> paths), kinematics.py (FK/IK, arm rendering), and
-trajectory.py (velocity-profiled joint trajectories), plus the
+This module is orchestration only: it wires together cv.py
+(image -> paths), Kinematics.py (FK/IK, arm rendering), and
+Trajectory.py (velocity-profiled joint trajectories), plus the
 animation loop and Savitzky-Golay post-smoothing. No CV or kinematics
-math lives here anymore.
+math lives here.
 
-NAYA: dynamixel_controller.py se DynamixelArm bhi wire kiya hai, taaki
-sim ke saath physical motors bhi move hon.
-NAYA: Arduino Nano Serial integration added for Z-axis pen up/down.
+Hardware:
+- dynamixel_controller.DynamixelArm drives the 3 Dynamixel joints.
+  Connecting and calibrating are explicit GUI actions (Connect /
+  Calibrate Zero buttons below) rather than automatic at startup, so a
+  missing or unplugged robot never prevents the app from opening --
+  it just runs sim-only until you connect.
+- NanoPenController drives the Z-axis (pen up/down) over a separate
+  Arduino Nano serial link.
 """
+import math
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -22,19 +28,20 @@ import serial
 import time
 
 from Configurations import (
-    MAX_REACH, MAX_LINEAR_SPEED, MAX_JOINT_VEL, DT, FPS, REVIEW_WINDOW, 
+    MAX_REACH, MAX_LINEAR_SPEED, MAX_JOINT_VEL, DT, FPS, REVIEW_WINDOW,
     TRAVEL_SPEED_MULT, PAUSE_DURATION, SG_WINDOW_LENGTH,
     SG_POLYORDER, JOINT_LIMITS,
     XDOG_SIGMA, XDOG_K_SIGMA, XDOG_EPSILON, XDOG_PHI, XDOG_GAMMA,
 )
 from Kinematics import FK, arm_link_positions, clip_to_joint_limits
 from Trajectory import generate_continuous_trajectory
-from Vision import image_to_robot_paths
-# from dynamixel_controller import DynamixelArm   # <-- NAYA
+from cv import image_to_robot_paths
+from dynamixel_controller import DynamixelArm
 
-# ---- NAYA: Arduino Nano Pen Controller Class ----
+
+# ---- Arduino Nano Pen Controller Class (Z-axis pen up/down) ----
 class NanoPenController:
-    def __init__(self, port='COM7', baud_rate=9600):
+    def __init__(self, port='COM6', baud_rate=9600):
         self.ser = None
         try:
             self.ser = serial.Serial(port, baud_rate, timeout=1)
@@ -59,7 +66,7 @@ class NanoPenController:
 
     def close(self):
         if self.ser and self.ser.is_open:
-            self.pen_up() # Safety lift before closing
+            self.pen_up()  # Safety lift before closing
             time.sleep(0.5)
             self.ser.close()
 
@@ -81,17 +88,20 @@ class Planar3DOFSimApp:
         self.is_running = False
         self.stroke_index = 0
 
-        # ---- NAYA: hardware arm connect karo ----
-        # Agar port connect nahi hota, app crash nahi hogi - sim-only chalegi.
+        # ---- Dynamixel arm: connected on demand via the "Connect"
+        # button in the hardware panel (see setup_gui), never at
+        # startup -- a missing/unplugged robot should never block the
+        # sim from opening.
         self.arm = None
-        # try:
-        #     # self.arm = DynamixelArm()
-        # except Exception as e:
-        #     print(f"[HARDWARE] Dynamixel arm connect nahi hui, sim-only mode: {e}")
+        self.dxl_port_var = tk.StringVar(value='COM3')
 
-        # ---- NAYA: hardware nano pen connect karo ----
-        self.nano_pen = NanoPenController(port='COM10', baud_rate=9600) # Update COM port as needed
-        self.current_hw_pen_state = 'UP' # Default starting state
+        # ---- Arduino Nano pen (Z-axis) ----
+        # NOTE: this defaults to COM10 here, but Calibration.py's
+        # standalone NanoPenController() call uses the class default
+        # (COM7). If these are the same physical Nano, double-check
+        # which port it's actually enumerating as on your machine.
+        self.nano_pen = NanoPenController(port='COM6', baud_rate=9600)
+        self.current_hw_pen_state = 'UP'  # Default starting state
 
         self.setup_gui()
         self.setup_plots()
@@ -102,6 +112,34 @@ class Planar3DOFSimApp:
     def setup_gui(self):
         control_frame = ttk.Frame(self.root, padding="10")
         control_frame.pack(side=tk.LEFT, fill=tk.Y)
+
+        # ---- Dynamixel hardware panel ----
+        hw_frame = ttk.LabelFrame(control_frame, text="Dynamixel Hardware")
+        hw_frame.pack(pady=10, fill=tk.X)
+
+        port_row = ttk.Frame(hw_frame)
+        port_row.pack(fill=tk.X, padx=5, pady=(5, 0))
+        ttk.Label(port_row, text="Port:").pack(side=tk.LEFT)
+        ttk.Entry(port_row, textvariable=self.dxl_port_var, width=10).pack(side=tk.LEFT, padx=5)
+
+        btn_row = ttk.Frame(hw_frame)
+        btn_row.pack(fill=tk.X, padx=5, pady=5)
+        self.btn_connect = ttk.Button(btn_row, text="Connect", command=self.connect_dynamixel)
+        self.btn_connect.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+        self.btn_calibrate = ttk.Button(btn_row, text="Calibrate Zero", command=self.calibrate_dynamixel, state=tk.DISABLED)
+        self.btn_calibrate.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+
+        self.btn_home = ttk.Button(hw_frame, text="Home (Go to Zero)", command=self.home_dynamixel, state=tk.DISABLED)
+        self.btn_home.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+        self.hw_status_var = tk.StringVar(value="ARM: NOT CONNECTED")
+        ttk.Label(hw_frame, textvariable=self.hw_status_var, font=("Arial", 9, "italic")).pack(padx=5, pady=(0, 2))
+
+        self.dxl_angle_var = tk.StringVar(value="Live angles: --")
+        ttk.Label(hw_frame, textvariable=self.dxl_angle_var, font=("Consolas", 8)).pack(padx=5, pady=(0, 5))
+
+        pen_txt = "PEN (Nano): CONNECTED" if self.nano_pen.ser else "PEN (Nano): SIM-ONLY"
+        ttk.Label(control_frame, text=pen_txt, font=("Arial", 9, "italic")).pack(pady=(0, 5))
 
         ttk.Button(control_frame, text="Upload Image", command=self.upload_image).pack(pady=10, fill=tk.X)
 
@@ -151,11 +189,6 @@ class Planar3DOFSimApp:
         self.timeline_label = ttk.Label(review_frame, text="Window: 0.0s - 5.0s")
         self.timeline_label.pack(pady=(0, 5))
 
-        # ---- NAYA: hardware status dikhane ke liye ----
-        arm_txt = "ARM: CONNECTED" if self.arm else "ARM: SIM-ONLY"
-        pen_txt = "PEN: CONNECTED" if self.nano_pen.ser else "PEN: SIM-ONLY"
-        ttk.Label(control_frame, text=f"{arm_txt} | {pen_txt}", font=("Arial", 9, "italic")).pack(pady=(0, 5))
-
         self.status_var = tk.StringVar(value="STATUS: IDLE")
         ttk.Label(control_frame, textvariable=self.status_var, font=("Arial", 10, "bold")).pack(pady=10)
 
@@ -173,8 +206,13 @@ class Planar3DOFSimApp:
         self.ax_arm.set_ylim(-15, 15)
         self.ax_arm.grid(True, linestyle='--')
 
-        self.arm_line, = self.ax_arm.plot([], [], 'o-', lw=6, color='#2c3e50', zorder=4)
+        self.arm_line, = self.ax_arm.plot([], [], 'o-', lw=6, color='#2c3e50', zorder=4, label='Commanded arm')
         self.brush_line, = self.ax_arm.plot([], [], 'o-', lw=4, color='#e74c3c', zorder=5)
+        # Live present-position feedback from the real Dynamixels --
+        # only moves once the arm is connected and calibrated.
+        self.actual_marker, = self.ax_arm.plot([], [], 'x', color='#27ae60', markersize=10,
+                                                 markeredgewidth=2, zorder=6, label='Actual (Dynamixel)')
+        self.ax_arm.legend(loc='upper right', fontsize=8)
 
         self.pen_status_text = self.ax_arm.text(0.03, 0.95, '', transform=self.ax_arm.transAxes,
                                                   fontsize=11, fontweight='bold', color='#c0392b',
@@ -209,6 +247,65 @@ class Planar3DOFSimApp:
 
         self.draw_arm()
 
+    # ---- Dynamixel hardware wiring ----
+    def connect_dynamixel(self):
+        port = self.dxl_port_var.get().strip()
+        try:
+            self.arm = DynamixelArm(port=port)
+            self.hw_status_var.set(f"ARM: CONNECTED ({port}), NOT CALIBRATED")
+            self.btn_calibrate.config(state=tk.NORMAL)
+            self.btn_connect.config(state=tk.DISABLED)
+        except Exception as e:
+            self.arm = None
+            self.hw_status_var.set(f"ARM: CONNECT FAILED ({e})")
+
+    def calibrate_dynamixel(self):
+        if not self.arm:
+            return
+        proceed = messagebox.askokcancel(
+            "Zero Calibration",
+            "Move the ENTIRE physical arm by hand so it points straight "
+            "along the X-axis (all joints at 0 rad), then click OK.\n\n"
+            "This records the current encoder positions as the zero "
+            "reference -- the same step as the console prompt in "
+            "Calibration.py."
+        )
+        if not proceed:
+            return
+        try:
+            self.arm.calibrate_zero()
+            self.hw_status_var.set("ARM: CONNECTED & CALIBRATED")
+            self.btn_home.config(state=tk.NORMAL)
+            self.poll_dynamixel_feedback()
+        except Exception as e:
+            self.hw_status_var.set(f"ARM: CALIBRATION FAILED ({e})")
+
+    def home_dynamixel(self):
+        if self.arm and self.arm.calibrated:
+            self.arm.go_to_zero()
+
+    def poll_dynamixel_feedback(self):
+        """
+        Periodically reads the servos' actual present position back
+        over the bus and overlays it on the plot as a green X -- the
+        live signal from the Dynamixel, independent of whatever the
+        sim last commanded. Keeps rescheduling itself while calibrated.
+        """
+        if self.arm and self.arm.calibrated:
+            try:
+                angles = self.arm.get_present_angles()
+                if angles is not None:
+                    deg = [math.degrees(a) for a in angles]
+                    self.dxl_angle_var.set(
+                        f"Live: S {deg[0]:6.1f} deg  E {deg[1]:6.1f} deg  W {deg[2]:6.1f} deg"
+                    )
+                    ax, ay = FK(np.array(angles))
+                    self.actual_marker.set_data([ax], [ay])
+                    self.canvas.draw_idle()
+            except Exception as e:
+                self.hw_status_var.set(f"ARM: FEEDBACK ERROR ({e})")
+            self.root.after(200, self.poll_dynamixel_feedback)
+
     # State management
     def reset_sim(self):
         self.is_running = False
@@ -220,7 +317,7 @@ class Planar3DOFSimApp:
         self.stroke_index = 0
         self.raw_image = None
         self.final_cv_paths = []
-        
+
         # Reset hardware pen
         if self.nano_pen and self.current_hw_pen_state != 'UP':
             self.nano_pen.pen_up()
@@ -261,7 +358,7 @@ class Planar3DOFSimApp:
 
         self.canvas.draw_idle()
 
-    # Image upload + preview (vision.py does the actual CV work)
+    # Image upload + preview (cv.py does the actual CV work)
     def upload_image(self):
         if self.is_running:
             return
@@ -412,11 +509,11 @@ class Planar3DOFSimApp:
             pen_status = self.traj_pen_status[self.traj_idx]
             p3 = self.draw_arm()
 
-            # ---- NAYA: physical motors ko bhi wahi angle bhejo jo sim mein dikh raha hai ----
+            # ---- physical motors get the same angle the sim just drew ----
             if self.arm:
                 self.arm.move_to_angles(self.q_current)
-                
-            # ---- NAYA: physical Nano Z-axis servo ko trigger karo ----
+
+            # ---- physical Nano Z-axis servo trigger ----
             if self.nano_pen:
                 # Trigger state change purely on strings to sync with PAUSE_DURATION
                 if "UP" in pen_status or "LIFTING" in pen_status:
@@ -448,9 +545,9 @@ class Planar3DOFSimApp:
             t_min = max(0, current_time - REVIEW_WINDOW)
             t_max = max(REVIEW_WINDOW, current_time)
 
-            # ---- FIX: sirf visible window ka data plot karo, poori history nahi -
-            # warna lambi trajectory pe har frame heavier hota jaata hai aur
-            # asli drawing speed slow padne lagti hai (regardless of MAX_LINEAR_SPEED).
+            # ---- only plot the visible window, not the whole history --
+            # otherwise every frame gets heavier as the trajectory grows
+            # and real drawing speed slows down regardless of MAX_LINEAR_SPEED.
             window_start_idx = max(0, self.traj_idx + 1 - int(REVIEW_WINDOW * FPS) - 5)
             t_window = t_arr[window_start_idx:]
             dq_window = self.traj_dq[window_start_idx:self.traj_idx + 1]
@@ -470,18 +567,25 @@ class Planar3DOFSimApp:
             self.pen_status_text.set_text("DRAWING COMPLETE")
             self.status_var.set("STATUS: COMPLETE. USE SLIDER TO REVIEW.")
             self.timeline_slider.state(['!disabled'])
-            
+
             # Safely lift pen after finishing drawing
             if self.nano_pen and self.current_hw_pen_state != 'UP':
                 self.nano_pen.pen_up()
                 self.current_hw_pen_state = 'UP'
 
     def on_close(self):
-        # ---- NAYA: band karte waqt torque off + port close, motors safe rahenge ----
+        # Torque off + close ports on shutdown so motors are left safe.
         if self.nano_pen:
             self.nano_pen.close()
         if self.arm:
             self.arm.close()
-            
+
         self.root.destroy()
         plt.close('all')
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = Planar3DOFSimApp(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
+    root.mainloop()

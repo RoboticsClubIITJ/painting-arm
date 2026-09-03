@@ -1,6 +1,6 @@
 import os
 import math
-import cv2 # REMOVE THIS LATER
+# import cv # REMOVE THIS LATER
 import numpy as np
 import dynamixel_sdk as dxl
 import time
