@@ -1,16 +1,3 @@
-"""
-Tkinter + matplotlib GUI for the 3-DOF drawing arm simulator.
-
-This module is orchestration only: it wires together vision.py
-(image -> paths), kinematics.py (FK/IK, arm rendering), and
-trajectory.py (velocity-profiled joint trajectories), plus the
-animation loop and Savitzky-Golay post-smoothing. No CV or kinematics
-math lives here anymore.
-
-NAYA: dynamixel_controller.py se DynamixelArm bhi wire kiya hai, taaki
-sim ke saath physical motors bhi move hon.
-NAYA: Arduino Nano Serial integration added for Z-axis pen up/down.
-"""
 import tkinter as tk
 from tkinter import ttk, filedialog
 import numpy as np
@@ -18,7 +5,6 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import cv2
 import scipy.signal as signal
-import serial
 import time
 
 from Configurations import (
@@ -30,42 +16,9 @@ from Configurations import (
 from Kinematics import FK, arm_link_positions, clip_to_joint_limits
 from Trajectory import generate_continuous_trajectory
 from Vision import image_to_robot_paths
-# from dynamixel_controller import DynamixelArm   # <-- NAYA
-
-# ---- NAYA: Arduino Nano Pen Controller Class ----
-class NanoPenController:
-    def __init__(self, port='COM7', baud_rate=9600):
-        self.ser = None
-        try:
-            self.ser = serial.Serial(port, baud_rate, timeout=1)
-            time.sleep(2)  # Wait for Arduino to reset upon serial connection
-            print(f"[HARDWARE] Nano Pen Controller connected on {port}.")
-        except Exception as e:
-            print(f"[HARDWARE] Nano Pen connection failed (sim-only for pen): {e}")
-
-    def pen_up(self):
-        if self.ser:
-            try:
-                self.ser.write(b'U')  # Send 'U' for UP (change to b'0' if your nano code uses 0)
-            except Exception as e:
-                print(f"Serial write error (UP): {e}")
-
-    def pen_down(self):
-        if self.ser:
-            try:
-                self.ser.write(b'D')  # Send 'D' for DOWN (change to b'1' if your nano code uses 1)
-            except Exception as e:
-                print(f"Serial write error (DOWN): {e}")
-
-    def close(self):
-        if self.ser and self.ser.is_open:
-            self.pen_up() # Safety lift before closing
-            time.sleep(0.5)
-            self.ser.close()
-
 
 class Planar3DOFSimApp:
-    def __init__(self, root):
+    def __init__(self, root, arm=None, nano_pen=None):
         self.root = root
         self.root.title("3-DOF Drawing (Kinematic Limits + Face Portrait Mode)")
         self.q_current = np.array([np.pi / 4, -np.pi / 2, np.pi / 4], dtype=float)
@@ -81,24 +34,14 @@ class Planar3DOFSimApp:
         self.is_running = False
         self.stroke_index = 0
 
-        # ---- NAYA: hardware arm connect karo ----
-        # Agar port connect nahi hota, app crash nahi hogi - sim-only chalegi.
-        self.arm = None
-        # try:
-        #     # self.arm = DynamixelArm()
-        # except Exception as e:
-        #     print(f"[HARDWARE] Dynamixel arm connect nahi hui, sim-only mode: {e}")
-
-        # ---- NAYA: hardware nano pen connect karo ----
-        self.nano_pen = NanoPenController(port='COM10', baud_rate=9600) # Update COM port as needed
-        self.current_hw_pen_state = 'UP' # Default starting state
+        self.arm = arm
+        self.nano_pen = nano_pen
 
         self.setup_gui()
         self.setup_plots()
 
         self.root.bind('<Return>', self.update_preview)
 
-    # GUI construction
     def setup_gui(self):
         control_frame = ttk.Frame(self.root, padding="10")
         control_frame.pack(side=tk.LEFT, fill=tk.Y)
@@ -151,9 +94,8 @@ class Planar3DOFSimApp:
         self.timeline_label = ttk.Label(review_frame, text="Window: 0.0s - 5.0s")
         self.timeline_label.pack(pady=(0, 5))
 
-        # ---- NAYA: hardware status dikhane ke liye ----
         arm_txt = "ARM: CONNECTED" if self.arm else "ARM: SIM-ONLY"
-        pen_txt = "PEN: CONNECTED" if self.nano_pen.ser else "PEN: SIM-ONLY"
+        pen_txt = "PEN: CONNECTED" if self.nano_pen and self.nano_pen.ser else "PEN: SIM-ONLY"
         ttk.Label(control_frame, text=f"{arm_txt} | {pen_txt}", font=("Arial", 9, "italic")).pack(pady=(0, 5))
 
         self.status_var = tk.StringVar(value="STATUS: IDLE")
@@ -206,10 +148,8 @@ class Planar3DOFSimApp:
             self.v_lines.append(line)
 
         self.vel_axes[-1].set_xlabel("Time (sec)")
-
         self.draw_arm()
 
-    # State management
     def reset_sim(self):
         self.is_running = False
         self.traj_q = []
@@ -222,9 +162,8 @@ class Planar3DOFSimApp:
         self.final_cv_paths = []
         
         # Reset hardware pen
-        if self.nano_pen and self.current_hw_pen_state != 'UP':
+        if self.nano_pen:
             self.nano_pen.pen_up()
-            self.current_hw_pen_state = 'UP'
 
         for p in self.preview_lines:
             p.remove()
@@ -261,7 +200,6 @@ class Planar3DOFSimApp:
 
         self.canvas.draw_idle()
 
-    # Image upload + preview (vision.py does the actual CV work)
     def upload_image(self):
         if self.is_running:
             return
@@ -306,7 +244,6 @@ class Planar3DOFSimApp:
         self.status_var.set("STATUS: PREVIEW READY. PRESS START.")
         self.btn_start.config(state=tk.NORMAL)
 
-    # Trajectory generation + playback
     def start_drawing(self):
         if not self.final_cv_paths:
             return
@@ -350,7 +287,6 @@ class Planar3DOFSimApp:
             curr_x, curr_y = FK(q_sim)
             start_x, start_y = path[0]
 
-            # --- Pen Up & Travel ---
             travel_traj = generate_continuous_trajectory([(curr_x, curr_y), (start_x, start_y)], q_sim, v_max=MAX_LINEAR_SPEED * TRAVEL_SPEED_MULT)
             travel_traj = smooth_segment(travel_traj)
 
@@ -369,7 +305,6 @@ class Planar3DOFSimApp:
             self.traj_draw_flags.extend([False] * pause_frames)
             self.traj_pen_status.extend(["LOWERING PEN"] * pause_frames)
 
-            # --- Pen Down & Draw ---
             draw_traj = generate_continuous_trajectory(path, q_sim, v_max=MAX_LINEAR_SPEED)
             draw_traj = smooth_segment(draw_traj)
             if draw_traj:
@@ -383,7 +318,6 @@ class Planar3DOFSimApp:
             return
 
         self.traj_q = np.array(self.traj_q)
-
         self.traj_dq = np.gradient(self.traj_q, DT, axis=0)
 
         total_duration = len(self.traj_q) * DT
@@ -397,7 +331,6 @@ class Planar3DOFSimApp:
         self.status_var.set("STATUS: EXECUTING...")
         self.run_animation_loop()
 
-    # Rendering + animation
     def draw_arm(self):
         p0, p1, p2, p3 = arm_link_positions(self.q_current)
         self.arm_line.set_data([p0[0], p1[0], p2[0]], [p0[1], p1[1], p2[1]])
@@ -412,21 +345,15 @@ class Planar3DOFSimApp:
             pen_status = self.traj_pen_status[self.traj_idx]
             p3 = self.draw_arm()
 
-            # ---- NAYA: physical motors ko bhi wahi angle bhejo jo sim mein dikh raha hai ----
+            # Hardware Sync
             if self.arm:
                 self.arm.move_to_angles(self.q_current)
                 
-            # ---- NAYA: physical Nano Z-axis servo ko trigger karo ----
             if self.nano_pen:
-                # Trigger state change purely on strings to sync with PAUSE_DURATION
                 if "UP" in pen_status or "LIFTING" in pen_status:
-                    if self.current_hw_pen_state != 'UP':
-                        self.nano_pen.pen_up()
-                        self.current_hw_pen_state = 'UP'
+                    self.nano_pen.pen_up()
                 elif "DOWN" in pen_status or "LOWERING" in pen_status:
-                    if self.current_hw_pen_state != 'DOWN':
-                        self.nano_pen.pen_down()
-                        self.current_hw_pen_state = 'DOWN'
+                    self.nano_pen.pen_down()
 
             self.pen_status_text.set_text(f"Z-AXIS: {pen_status}")
 
@@ -448,9 +375,6 @@ class Planar3DOFSimApp:
             t_min = max(0, current_time - REVIEW_WINDOW)
             t_max = max(REVIEW_WINDOW, current_time)
 
-            # ---- FIX: sirf visible window ka data plot karo, poori history nahi -
-            # warna lambi trajectory pe har frame heavier hota jaata hai aur
-            # asli drawing speed slow padne lagti hai (regardless of MAX_LINEAR_SPEED).
             window_start_idx = max(0, self.traj_idx + 1 - int(REVIEW_WINDOW * FPS) - 5)
             t_window = t_arr[window_start_idx:]
             dq_window = self.traj_dq[window_start_idx:self.traj_idx + 1]
@@ -471,13 +395,10 @@ class Planar3DOFSimApp:
             self.status_var.set("STATUS: COMPLETE. USE SLIDER TO REVIEW.")
             self.timeline_slider.state(['!disabled'])
             
-            # Safely lift pen after finishing drawing
-            if self.nano_pen and self.current_hw_pen_state != 'UP':
+            if self.nano_pen:
                 self.nano_pen.pen_up()
-                self.current_hw_pen_state = 'UP'
 
     def on_close(self):
-        # ---- NAYA: band karte waqt torque off + port close, motors safe rahenge ----
         if self.nano_pen:
             self.nano_pen.close()
         if self.arm:

@@ -34,7 +34,7 @@ from Vision import image_to_robot_paths
 
 # ---- NAYA: Arduino Nano Pen Controller Class ----
 class NanoPenController:
-    def __init__(self, port='COM7', baud_rate=9600):
+    def __init__(self, port='COM10', baud_rate=9600):
         self.ser = None
         try:
             self.ser = serial.Serial(port, baud_rate, timeout=1)

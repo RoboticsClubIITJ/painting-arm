@@ -9,7 +9,6 @@ math lives here anymore.
 
 NAYA: dynamixel_controller.py se DynamixelArm bhi wire kiya hai, taaki
 sim ke saath physical motors bhi move hon.
-NAYA: Arduino Nano Serial integration added for Z-axis pen up/down.
 """
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -18,8 +17,6 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import cv2
 import scipy.signal as signal
-import serial
-import time
 
 from Configurations import (
     MAX_REACH, MAX_LINEAR_SPEED, MAX_JOINT_VEL, DT, FPS, REVIEW_WINDOW, 
@@ -30,38 +27,7 @@ from Configurations import (
 from Kinematics import FK, arm_link_positions, clip_to_joint_limits
 from Trajectory import generate_continuous_trajectory
 from Vision import image_to_robot_paths
-# from dynamixel_controller import DynamixelArm   # <-- NAYA
-
-# ---- NAYA: Arduino Nano Pen Controller Class ----
-class NanoPenController:
-    def __init__(self, port='COM7', baud_rate=9600):
-        self.ser = None
-        try:
-            self.ser = serial.Serial(port, baud_rate, timeout=1)
-            time.sleep(2)  # Wait for Arduino to reset upon serial connection
-            print(f"[HARDWARE] Nano Pen Controller connected on {port}.")
-        except Exception as e:
-            print(f"[HARDWARE] Nano Pen connection failed (sim-only for pen): {e}")
-
-    def pen_up(self):
-        if self.ser:
-            try:
-                self.ser.write(b'U')  # Send 'U' for UP (change to b'0' if your nano code uses 0)
-            except Exception as e:
-                print(f"Serial write error (UP): {e}")
-
-    def pen_down(self):
-        if self.ser:
-            try:
-                self.ser.write(b'D')  # Send 'D' for DOWN (change to b'1' if your nano code uses 1)
-            except Exception as e:
-                print(f"Serial write error (DOWN): {e}")
-
-    def close(self):
-        if self.ser and self.ser.is_open:
-            self.pen_up() # Safety lift before closing
-            time.sleep(0.5)
-            self.ser.close()
+from dynamixel_controller import DynamixelArm   # <-- NAYA
 
 
 class Planar3DOFSimApp:
@@ -84,14 +50,10 @@ class Planar3DOFSimApp:
         # ---- NAYA: hardware arm connect karo ----
         # Agar port connect nahi hota, app crash nahi hogi - sim-only chalegi.
         self.arm = None
-        # try:
-        #     # self.arm = DynamixelArm()
-        # except Exception as e:
-        #     print(f"[HARDWARE] Dynamixel arm connect nahi hui, sim-only mode: {e}")
-
-        # ---- NAYA: hardware nano pen connect karo ----
-        self.nano_pen = NanoPenController(port='COM10', baud_rate=9600) # Update COM port as needed
-        self.current_hw_pen_state = 'UP' # Default starting state
+        try:
+            self.arm = DynamixelArm()
+        except Exception as e:
+            print(f"[HARDWARE] Dynamixel arm connect nahi hui, sim-only mode: {e}")
 
         self.setup_gui()
         self.setup_plots()
@@ -152,9 +114,8 @@ class Planar3DOFSimApp:
         self.timeline_label.pack(pady=(0, 5))
 
         # ---- NAYA: hardware status dikhane ke liye ----
-        arm_txt = "ARM: CONNECTED" if self.arm else "ARM: SIM-ONLY"
-        pen_txt = "PEN: CONNECTED" if self.nano_pen.ser else "PEN: SIM-ONLY"
-        ttk.Label(control_frame, text=f"{arm_txt} | {pen_txt}", font=("Arial", 9, "italic")).pack(pady=(0, 5))
+        hw_text = "HARDWARE: CONNECTED" if self.arm else "HARDWARE: NOT CONNECTED (sim-only)"
+        ttk.Label(control_frame, text=hw_text, font=("Arial", 9, "italic")).pack(pady=(0, 5))
 
         self.status_var = tk.StringVar(value="STATUS: IDLE")
         ttk.Label(control_frame, textvariable=self.status_var, font=("Arial", 10, "bold")).pack(pady=10)
@@ -220,11 +181,6 @@ class Planar3DOFSimApp:
         self.stroke_index = 0
         self.raw_image = None
         self.final_cv_paths = []
-        
-        # Reset hardware pen
-        if self.nano_pen and self.current_hw_pen_state != 'UP':
-            self.nano_pen.pen_up()
-            self.current_hw_pen_state = 'UP'
 
         for p in self.preview_lines:
             p.remove()
@@ -415,18 +371,6 @@ class Planar3DOFSimApp:
             # ---- NAYA: physical motors ko bhi wahi angle bhejo jo sim mein dikh raha hai ----
             if self.arm:
                 self.arm.move_to_angles(self.q_current)
-                
-            # ---- NAYA: physical Nano Z-axis servo ko trigger karo ----
-            if self.nano_pen:
-                # Trigger state change purely on strings to sync with PAUSE_DURATION
-                if "UP" in pen_status or "LIFTING" in pen_status:
-                    if self.current_hw_pen_state != 'UP':
-                        self.nano_pen.pen_up()
-                        self.current_hw_pen_state = 'UP'
-                elif "DOWN" in pen_status or "LOWERING" in pen_status:
-                    if self.current_hw_pen_state != 'DOWN':
-                        self.nano_pen.pen_down()
-                        self.current_hw_pen_state = 'DOWN'
 
             self.pen_status_text.set_text(f"Z-AXIS: {pen_status}")
 
@@ -470,18 +414,10 @@ class Planar3DOFSimApp:
             self.pen_status_text.set_text("DRAWING COMPLETE")
             self.status_var.set("STATUS: COMPLETE. USE SLIDER TO REVIEW.")
             self.timeline_slider.state(['!disabled'])
-            
-            # Safely lift pen after finishing drawing
-            if self.nano_pen and self.current_hw_pen_state != 'UP':
-                self.nano_pen.pen_up()
-                self.current_hw_pen_state = 'UP'
 
     def on_close(self):
         # ---- NAYA: band karte waqt torque off + port close, motors safe rahenge ----
-        if self.nano_pen:
-            self.nano_pen.close()
         if self.arm:
             self.arm.close()
-            
         self.root.destroy()
         plt.close('all')
