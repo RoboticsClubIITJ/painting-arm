@@ -1,17 +1,21 @@
 import os
 import math
-import cv2 # REMOVE THIS LATER
+# import cv2 # REMOVE THIS LATER
 import numpy as np
 import dynamixel_sdk as dxl
 import time
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from Dynamixel.Trajectory import generate_continuous_trajectory
-from Dynamixel.Configurations import MAX_LINEAR_SPEED, FPS
-from Dynamixel.Kinematics import ik_fast_dls
-from Dynamixel.cv import *
-# import Dynamixel.gui as gui
+from Trajectory import generate_continuous_trajectory
+from Configurations import MAX_LINEAR_SPEED, FPS
+from Kinematics import ik_fast_dls
+from Pen_up_down import *
+from cv import *
+from gui import run_gui
 
+
+# import Dynamixel.gui as gui
+pen_controller = NanoPenController()
 # --- Configuration ---
 DXL_IDs = [0, 1, 2] # Shoulder (XM540), Elbow (XM430), Wrist (XM430)
 BAUDRATE = 1000000
@@ -143,6 +147,7 @@ def follow_path(path_points, current_angles):
         time.sleep(1.0 / FPS)
         
     print(f"Finished drawing. End angles (rad): {np.round(trajectory_q[-1], 3)}")
+    # _ = go_to_xy_3dof(, path_points[-1][1], trajectory_q[-1]) # make the arm go to (0, -400)
     return trajectory_q[-1]
 
 # --- 3. Interactive Command Loop ---
@@ -172,31 +177,38 @@ while True:
                 print("Invalid input. Please enter numeric values.")
                 
         elif cmd == 't':
-            print("Processing image...")
-            raw_image = cv2.imread('image.png', cv2.IMREAD_GRAYSCALE)
+            print("Opening GUI for image processing...")
+            cv_paths = run_gui()
             
-            if raw_image is None:
-                print("Image not found! Check the file path.")
+            if not cv_paths:
+                print("GUI closed without generating paths. Ensure an image was uploaded.")
             else:
-                cv_paths = image_to_robot_paths(raw_image)
                 print(f"Drawing {len(cv_paths)} separate strokes...")
                 
                 for i, path in enumerate(cv_paths):
+                    if i == 0: continue
                     print(f"Executing stroke {i+1}/{len(cv_paths)}...")
                     
-                    # Travel to the starting coordinate of the new stroke
                     start_x, start_y = path[0]
+                    pen_controller.pen_up()
+                    time.sleep(1)
                     current_joint_angles = go_to_xy_3dof(start_x, start_y, current_joint_angles)
+                    time.sleep(1)
+                    pen_controller.pen_down()
+                    time.sleep(1)
                     
                     # Trace the contour smoothly
                     current_joint_angles = follow_path(path, current_joint_angles)
 
+                
     except (KeyboardInterrupt, Exception) as e:
+        pen_controller.pen_up()
+        time.sleep(1)
         for i, dxl_id in enumerate(DXL_IDs):
             write_signed_position(dxl_id, zero_ticks[i])
         current_joint_angles = [0.0, 0.0, 0.0]
         print("Returned to ZERO position.")
-        time.sleep(5)
+        time.sleep(2)
         set_torque(False)
         print(f"\nTorque disabled. Exiting due to {e}.")
         break
