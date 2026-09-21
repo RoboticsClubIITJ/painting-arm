@@ -12,16 +12,7 @@ Pipeline:
 import numpy as np
 import cv2
 from scipy.interpolate import splprep, splev
-from Configurations import (
-    MIN_CONTOUR_ARC_LEN,
-    MIN_CONTOUR_POINTS,
-    SPLINE_SMOOTHING,
-    APPROX_POLY_EPSILON,
-    TARGET_CANVAS_W,
-    TARGET_CANVAS_H,
-    CANVAS_CENTER_X,
-    CANVAS_CENTER_Y,
-)
+from Configurations import (MIN_CONTOUR_ARC_LEN, MIN_CONTOUR_POINTS, SPLINE_SMOOTHING, APPROX_POLY_EPSILON, TARGET_CANVAS_W, TARGET_CANVAS_H, CANVAS_CENTER_X, CANVAS_CENTER_Y,)
 
 
 class AnnotatedPath(list):
@@ -82,9 +73,7 @@ def automatic_parameters(image):
 
 def remove_small_components(binary_image):
     foreground = np.uint8(binary_image == 0)
-    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
-        foreground, connectivity=8
-    )
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=8)
 
     minimum_area = int(np.clip(binary_image.size * 0.00001, 8, 500))
     cleaned = np.full_like(binary_image, 255)
@@ -95,9 +84,7 @@ def remove_small_components(binary_image):
     return cleaned
 
 
-def preprocess_image(
-    raw_image, sigma=None, k_sigma=None, epsilon=None, phi=None, gamma=None
-):
+def preprocess_image(raw_image, sigma=None, k_sigma=None, epsilon=None, phi=None, gamma=None):
     if raw_image.ndim == 3:
         gray = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
     else:
@@ -105,13 +92,7 @@ def preprocess_image(
 
     smoothed = cv2.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
 
-    if (
-        sigma is None
-        or k_sigma is None
-        or epsilon is None
-        or phi is None
-        or gamma is None
-    ):
+    if (sigma is None or k_sigma is None or epsilon is None or phi is None or gamma is None):
         auto = automatic_parameters(smoothed)
         sigma = auto[0] if sigma is None else sigma
         k_sigma = auto[1] if k_sigma is None else k_sigma
@@ -119,18 +100,9 @@ def preprocess_image(
         phi = auto[3] if phi is None else phi
         gamma = auto[4] if gamma is None else gamma
 
-    xdog_output = xdog_filter(
-        smoothed,
-        sigma=sigma,
-        k_sigma=k_sigma,
-        epsilon=epsilon,
-        phi=phi,
-        gamma=gamma,
-    )
+    xdog_output = xdog_filter(smoothed, sigma=sigma, k_sigma=k_sigma, epsilon=epsilon, phi=phi, gamma=gamma,)
 
-    _, binary_sketch = cv2.threshold(
-        xdog_output, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
+    _, binary_sketch = cv2.threshold(xdog_output, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     binary_sketch = remove_small_components(binary_sketch)
     return binary_sketch
@@ -138,9 +110,7 @@ def preprocess_image(
 
 def extract_smoothed_contours(binary_image):
     inverted_binary = cv2.bitwise_not(binary_image)
-    contours, _ = cv2.findContours(
-        inverted_binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
-    )
+    contours, _ = cv2.findContours(inverted_binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
     paths = []
     for cnt in contours:
         cnt = cnt.squeeze()
@@ -159,9 +129,7 @@ def extract_smoothed_contours(binary_image):
         if len(cnt) < MIN_CONTOUR_POINTS:
             continue
 
-        poly_approx = cv2.approxPolyDP(
-            cnt.astype(np.float32), APPROX_POLY_EPSILON, closed=False
-        ).squeeze()
+        poly_approx = cv2.approxPolyDP(cnt.astype(np.float32), APPROX_POLY_EPSILON, closed=False).squeeze()
 
         if poly_approx.ndim < 2 or len(poly_approx) < 3:
             poly_approx = cnt
@@ -170,13 +138,9 @@ def extract_smoothed_contours(binary_image):
         y = poly_approx[:, 1]
 
         try:
-            is_closed = (
-                np.linalg.norm(poly_approx[0] - poly_approx[-1]) < 3.0
-            )
+            is_closed = (np.linalg.norm(poly_approx[0] - poly_approx[-1]) < 3.0)
             spline_order = min(3, len(poly_approx) - 1)
-            tck, u = splprep(
-                [x, y], s=SPLINE_SMOOTHING, k=spline_order, per=is_closed
-            )
+            tck, u = splprep([x, y], s=SPLINE_SMOOTHING, k=spline_order, per=is_closed)
             num_points = max(8, int(arc_len * 0.4))
             u_new = np.linspace(u.min(), u.max(), num_points)
             x_new, y_new = splev(u_new, tck)
@@ -184,17 +148,9 @@ def extract_smoothed_contours(binary_image):
         except Exception:
             smooth_approx = poly_approx.astype(float)
 
-        x_bound, y_bound, _, _ = cv2.boundingRect(
-            smooth_approx.astype(np.int32)
-        )
+        x_bound, y_bound, _, _ = cv2.boundingRect(smooth_approx.astype(np.int32))
 
-        paths.append({
-            "points": smooth_approx,
-            "y": y_bound,
-            "x": x_bound,
-            "is_hatch": False,
-        })
-
+        paths.append({"points": smooth_approx,"y": y_bound,"x": x_bound,"is_hatch": False,})
     return paths
 
 
@@ -226,26 +182,14 @@ def generate_hatching_paths(binary_image, step=4):
                 continue
 
             if i % 2 == 0:
-                if (
-                    current_path
-                    and np.hypot(
-                        current_path[-1][0] - start, current_path[-1][1] - y
-                    )
-                    > step * 3
-                ):
+                if (current_path and np.hypot(current_path[-1][0] - start, current_path[-1][1] - y) > step * 3):
                     if len(current_path) > 1:
                         paths.append(np.array(current_path))
                     current_path = []
                 current_path.append([start, y])
                 current_path.append([end, y])
             else:
-                if (
-                    current_path
-                    and np.hypot(
-                        current_path[-1][0] - end, current_path[-1][1] - y
-                    )
-                    > step * 3
-                ):
+                if (current_path and np.hypot(current_path[-1][0] - end, current_path[-1][1] - y) > step * 3):
                     if len(current_path) > 1:
                         paths.append(np.array(current_path))
                     current_path = []
@@ -258,18 +202,10 @@ def generate_hatching_paths(binary_image, step=4):
     formatted_paths = []
     for p in paths:
         if len(p) >= 2:
-            x_bound, y_bound, _, _ = cv2.boundingRect(
-                np.array(p, dtype=np.int32)
-            )
-            formatted_paths.append({
-                "points": np.array(p, dtype=np.float32),
-                "y": y_bound,
-                "x": x_bound,
-                "is_hatch": True,
-            })
+            x_bound, y_bound, _, _ = cv2.boundingRect(np.array(p, dtype=np.int32))
+            formatted_paths.append({"points": np.array(p, dtype=np.float32),"y": y_bound,"x": x_bound,"is_hatch": True,})
 
     return formatted_paths
-
 
 def map_paths_to_workspace(paths, image_shape):
     paths = sorted(paths, key=lambda p: (p["y"], p["x"]))
@@ -283,35 +219,19 @@ def map_paths_to_workspace(paths, image_shape):
         for point in p:
             cx_img = point[0] - (w / 2.0)
             cy_img = point[1] - (h / 2.0)
-            mapped.append((
-                CANVAS_CENTER_X + (cx_img * scale),
-                CANVAS_CENTER_Y - (cy_img * scale),
-            ))
+            mapped.append((CANVAS_CENTER_X + (cx_img * scale), CANVAS_CENTER_Y - (cy_img * scale),))
 
-        if len(mapped) > 2 and np.hypot(
-            mapped[0][0] - mapped[-1][0], mapped[0][1] - mapped[-1][1]
-        ) < (3.0 * scale):
+        if len(mapped) > 2 and np.hypot(mapped[0][0] - mapped[-1][0], mapped[0][1] - mapped[-1][1]) < (3.0 * scale):
             mapped.append(mapped[0])
 
-        mapped_path_obj = AnnotatedPath(
-            mapped, is_hatch=p_dict.get("is_hatch", False)
-        )
+        mapped_path_obj = AnnotatedPath(mapped, is_hatch=p_dict.get("is_hatch", False))
         mapped_paths.append(mapped_path_obj)
 
     return mapped_paths
 
 
-def image_to_robot_paths(
-    raw_image, sigma=None, k_sigma=None, epsilon=None, phi=None, gamma=None
-):
-    binary_image = preprocess_image(
-        raw_image,
-        sigma=sigma,
-        k_sigma=k_sigma,
-        epsilon=epsilon,
-        phi=phi,
-        gamma=gamma,
-    )
+def image_to_robot_paths(raw_image, sigma=None, k_sigma=None, epsilon=None, phi=None, gamma=None):
+    binary_image = preprocess_image(raw_image, sigma=sigma, k_sigma=k_sigma, epsilon=epsilon, phi=phi, gamma=gamma,)
     paths = extract_smoothed_contours(binary_image)
     hatch_paths = generate_hatching_paths(binary_image, step=4)
     paths.extend(hatch_paths)
