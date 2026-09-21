@@ -5,7 +5,7 @@ from PIL import Image, ImageTk
 import numpy as np
 
 # Import the necessary functions from your existing cv.py
-from cv import preprocess_image, extract_smoothed_contours, map_paths_to_workspace
+from cv import generate_hatching_paths, preprocess_image, extract_smoothed_contours, map_paths_to_workspace
 
 class XDoGGUI:
     def __init__(self, master):
@@ -71,8 +71,22 @@ class XDoGGUI:
             gamma=self.gamma.get()
         )
 
+        # --- UPDATED: Combine contour paths AND hatching paths ---
+        contours = extract_smoothed_contours(binary_sketch)
+        hatches = generate_hatching_paths(binary_sketch, step=4)
+        all_paths = contours + hatches
+        
+        # Create a blank white image matching raw image dimensions
+        preview_img = np.full_like(self.raw_image, 255)
+        
+        # Draw outlines in black (0) and hatches in gray (128)
+        for p_dict in all_paths:
+            pts = np.int32(p_dict['points'])
+            color = 128 if p_dict.get('is_hatch') else 0
+            cv2.polylines(preview_img, [pts], isClosed=False, color=color, thickness=1)
+
         # Convert back to format tkinter can display
-        preview = Image.fromarray(binary_sketch)
+        preview = Image.fromarray(preview_img)
         preview.thumbnail((self.canvas_width, self.canvas_height), Image.Resampling.LANCZOS)
         self.tk_image = ImageTk.PhotoImage(preview)
 
@@ -95,11 +109,15 @@ class XDoGGUI:
                 phi=self.phi.get(),
                 gamma=self.gamma.get()
             )
-            paths = extract_smoothed_contours(binary_sketch)
-            self.cv_paths = map_paths_to_workspace(paths, self.raw_image.shape)
+            # --- UPDATED: Combine contours and hatches before mapping ---
+            contours = extract_smoothed_contours(binary_sketch)
+            hatches = generate_hatching_paths(binary_sketch, step=4)
+            all_paths = contours + hatches
+            
+            self.cv_paths = map_paths_to_workspace(all_paths, self.raw_image.shape)
         
         self.master.quit()
-
+        
 def run_gui():
     root = tk.Tk()
     app = XDoGGUI(root)
