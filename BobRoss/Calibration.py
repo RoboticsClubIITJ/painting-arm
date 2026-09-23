@@ -186,7 +186,7 @@ while True:
                 print(f"Drawing {len(cv_paths)} separate strokes...")
                 
                 for i, path in enumerate(cv_paths):
-                    if i == 0: continue
+                    # if i == 0: continue
                     print(f"Executing stroke {i+1}/{len(cv_paths)}...")
                     
                     start_x, start_y = path[0]

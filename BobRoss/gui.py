@@ -34,6 +34,9 @@ class XDoGGUI:
         self.create_slider(control_frame, "Phi", self.phi, 1, 100, 1)
         self.create_slider(control_frame, "Gamma", self.gamma, 0.5, 1.0, 0.01)
 
+        self.step = tk.IntVar(value=4)
+        self.create_slider(control_frame, "Hatch Step", self.step, 1, 20, 1)
+
         tk.Button(control_frame, text="Confirm & Send to Robot", command=self.confirm, width=20, bg="#2196F3", fg="white").pack(pady=20)
 
         # Image Preview Panel
@@ -71,9 +74,14 @@ class XDoGGUI:
             gamma=self.gamma.get()
         )
 
-        # --- UPDATED: Combine contour paths AND hatching paths ---
-        contours = extract_smoothed_contours(binary_sketch)
-        hatches = generate_hatching_paths(binary_sketch, step=4)
+        kernel = np.ones((3, 3), np.uint8)
+        hatch_regions = cv2.dilate(binary_sketch, kernel, iterations=1)
+        
+        contour_sketch = binary_sketch.copy()
+        contour_sketch[hatch_regions == 0] = 255
+
+        contours = extract_smoothed_contours(contour_sketch)
+        hatches = generate_hatching_paths(binary_sketch, step=self.step.get())
         all_paths = contours + hatches
         
         # Create a blank white image matching raw image dimensions
@@ -109,10 +117,16 @@ class XDoGGUI:
                 phi=self.phi.get(),
                 gamma=self.gamma.get()
             )
-            # --- UPDATED: Combine contours and hatches before mapping ---
-            contours = extract_smoothed_contours(binary_sketch)
-            hatches = generate_hatching_paths(binary_sketch, step=4)
+            kernel = np.ones((3, 3), np.uint8)
+            hatch_regions = cv2.dilate(binary_sketch, kernel, iterations=1)
+            
+            contour_sketch = binary_sketch.copy()
+            contour_sketch[hatch_regions == 0] = 255
+
+            contours = extract_smoothed_contours(contour_sketch)
+            hatches = generate_hatching_paths(binary_sketch, step=self.step.get())
             all_paths = contours + hatches
+            
             
             self.cv_paths = map_paths_to_workspace(all_paths, self.raw_image.shape)
         

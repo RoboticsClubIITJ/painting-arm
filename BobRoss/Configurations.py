@@ -20,9 +20,9 @@ JOINT_LIMITS = [
     (-2.056, 2.141),   # Wrist
 ]
 # Task-Space / Joint-Space Limits
-MAX_LINEAR_SPEED = 20.0       # cm/s  #15
-MAX_JOINT_VEL = 2.0           # rad/s   #1.0
-MAX_JOINT_ACC = 0.5           # rad/s^2 #0.2
+MAX_LINEAR_SPEED = 30.0       # cm/s  #15
+MAX_JOINT_VEL = 4.0           # rad/s   #1.0
+MAX_JOINT_ACC = 1.5           # rad/s^2 #0.2
 
 # Timing
 FPS = 30
@@ -36,7 +36,7 @@ IK_DAMPING = 0.05
 IK_MAX_STEP = 0.30            # rad per iteration
 
 # Trajectory Shaping
-SAFE_DECEL_RATE = 3.5         # cm/s^2
+SAFE_DECEL_RATE = 7.0         # cm/s^2
 MIN_SPEED_FLOOR = 0.5         # cm/s
 NEAR_TARGET_DIST = 0.1        # cm
 NEAR_TARGET_SPEED_FLOOR = 0.01   #0.01
