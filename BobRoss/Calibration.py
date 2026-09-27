@@ -40,6 +40,16 @@ REL_LIMIT_2 = [1468, 1256, 1396]
 portHandler = dxl.PortHandler(DEVICENAME)
 packetHandler = dxl.PacketHandler(PROTOCOL_VERSION)
 
+# --- Stall / Power-Loss Detection ---
+STALL_CHECK_INTERVAL = int(FPS * 0.5)   # check twice a second
+STALL_POSITION_THRESHOLD = 5            # ticks - actual movement below this = "not moving"
+STALL_COMMANDED_THRESHOLD = 15          # ticks - commanded movement above this = "should be moving"
+ROLLBACK_STROKES_ON_STALL = 3  #how many strokes to subtract in log file
+
+class ArmStallError(Exception):
+    """Raised when servos are commanded to move but don't — signals power loss or mechanical failure."""
+    pass
+
 if not portHandler.openPort() or not portHandler.setBaudRate(BAUDRATE):
     print("Failed to open port or set baudrate. Check COM port and power.")
     quit()
@@ -58,6 +68,19 @@ def write_signed_position(dxl_id, tick):
     if tick < 0:
         tick += 4294967296
     packetHandler.write4ByteTxRx(portHandler, dxl_id, ADDR_GOAL_POSITION, tick)
+
+def check_for_stall(prev_actual, prev_commanded, curr_commanded):
+    """Compares actual servo movement vs commanded movement over the last check window."""
+    actual = [read_signed_position(dxl_id) for dxl_id in DXL_IDs]
+    for i in range(len(DXL_IDs)):
+        commanded_delta = abs(curr_commanded[i] - prev_commanded[i])
+        actual_delta = abs(actual[i] - prev_actual[i])
+        if commanded_delta > STALL_COMMANDED_THRESHOLD and actual_delta < STALL_POSITION_THRESHOLD:
+            raise ArmStallError(
+                f"Joint {DXL_IDs[i]} not responding (commanded {commanded_delta} ticks, "
+                f"moved {actual_delta} ticks). Likely power loss."
+            )
+    return actual
 
 def set_torque(enable):
     for dxl_id in DXL_IDs:
@@ -95,6 +118,23 @@ def update_progress(stroke_index):
 def load_session():
     with open(LOG_FILE, "r") as f:
         return json.load(f)
+
+def rollback_progress(num_strokes):
+    """Called when a stall is detected — the last few logged 'completed' strokes
+    may actually be false/partial data written before the failure was caught."""
+    try:
+        with open(LOG_FILE, "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+
+    data["last_completed_stroke"] = max(-1, data["last_completed_stroke"] - num_strokes)
+
+    with open(LOG_FILE, "w") as f:
+        json.dump(data, f)
+
+    print(f"Rolled back progress by {num_strokes} strokes. "
+          f"Log now shows last_completed_stroke = {data['last_completed_stroke']}.")
 
 # --- 1. Initialization and Calibration Phase ---
 set_torque(False)
@@ -164,18 +204,30 @@ def follow_path(path_points, current_angles):
         
     print(f"Executing path with {len(trajectory_q)} frames...")
     
+    prev_actual = [read_signed_position(dxl_id) for dxl_id in DXL_IDs]   
+    prev_commanded = list(prev_actual)                                   
+    frame_counter = 0 
+
     for q_frame in trajectory_q:
+        clamped_ticks = [] 
         for i, dxl_id in enumerate(DXL_IDs):
             goal_tick = radians_to_ticks(q_frame[i], zero_ticks[i], invert=JOINT_INVERT[i])
             
             safe_max = max(max_ticks[i], min_ticks[i])
             safe_min = min(max_ticks[i], min_ticks[i])
             clamped_tick = max(min(goal_tick, safe_max), safe_min)
+            clamped_ticks.append(clamped_tick) 
 
             write_signed_position(dxl_id, clamped_tick)
             
         time.sleep(1.0 / FPS)
         
+        frame_counter += 1                                               
+        if frame_counter >= STALL_CHECK_INTERVAL:                        
+            prev_actual = check_for_stall(prev_actual, prev_commanded, clamped_ticks)  
+            prev_commanded = clamped_ticks                               
+            frame_counter = 0          
+
     print(f"Finished drawing. End angles (rad): {np.round(trajectory_q[-1], 3)}")
     # _ = go_to_xy_3dof(, path_points[-1][1], trajectory_q[-1]) # make the arm go to (0, -400)
     return trajectory_q[-1]
@@ -283,6 +335,8 @@ while True:
     except (KeyboardInterrupt, Exception) as e:
         pen_controller.pen_up()
         time.sleep(1)
+        if isinstance(e, ArmStallError):        # <-- ADD
+            rollback_progress(ROLLBACK_STROKES_ON_STALL)
         for i, dxl_id in enumerate(DXL_IDs):
             write_signed_position(dxl_id, zero_ticks[i])
         current_joint_angles = [0.0, 0.0, 0.0]
