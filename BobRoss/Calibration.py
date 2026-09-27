@@ -1,4 +1,5 @@
 import os
+import json
 import math
 # import cv2 # REMOVE THIS LATER
 import numpy as np
@@ -19,7 +20,7 @@ pen_controller = NanoPenController()
 # --- Configuration ---
 DXL_IDs = [0, 1, 2] # Shoulder (XM540), Elbow (XM430), Wrist (XM430)
 BAUDRATE = 1000000
-DEVICENAME = 'COM5'
+DEVICENAME = '/dev/ttyUSB1'
 PROTOCOL_VERSION = 2.0
 
 ADDR_OPERATING_MODE = 11        # Operating Mode Address
@@ -65,6 +66,35 @@ def set_torque(enable):
 def set_operating_mode(mode):
     for dxl_id in DXL_IDs:
         packetHandler.write1ByteTxRx(portHandler, dxl_id, ADDR_OPERATING_MODE, mode)
+
+# --- Progress Logging (for crash recovery) ---
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+LOG_FILE = os.path.join(LOG_DIR, "current_drawing.json")
+
+def save_new_session(zero_ticks_list, cv_paths):
+    """Called the moment strokes are generated & sent, before drawing starts."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    strokes_serializable = [
+        [[float(pt[0]), float(pt[1])] for pt in path] for path in cv_paths
+    ]
+    data = {
+        "zero_ticks": [int(z) for z in zero_ticks_list],
+        "strokes": strokes_serializable,
+        "last_completed_stroke": -1,
+    }
+    with open(LOG_FILE, "w") as f:
+        json.dump(data, f)
+
+def update_progress(stroke_index):
+    with open(LOG_FILE, "r") as f:
+        data = json.load(f)
+    data["last_completed_stroke"] = stroke_index
+    with open(LOG_FILE, "w") as f:
+        json.dump(data, f)
+
+def load_session():
+    with open(LOG_FILE, "r") as f:
+        return json.load(f)
 
 # --- 1. Initialization and Calibration Phase ---
 set_torque(False)
@@ -155,7 +185,7 @@ current_joint_angles = [0.0, 0.0, 0.0]
 
 while True:
     try:
-        cmd = input("\nCommand ('z'=zero, 'g'=go to XY, 't'=test path, 'q'=quit): ").strip().lower()
+        cmd = input("\nCommand ('z'=zero, 'g'=go to XY, 't'=test path, 'r'=recover, 'q'=quit): ").strip().lower()
         
         if cmd == 'q':
             set_torque(False)
@@ -184,7 +214,8 @@ while True:
                 print("GUI closed without generating paths. Ensure an image was uploaded.")
             else:
                 print(f"Drawing {len(cv_paths)} separate strokes...")
-                
+                save_new_session(zero_ticks, cv_paths) 
+
                 for i, path in enumerate(cv_paths):
                     # if i == 0: continue
                     print(f"Executing stroke {i+1}/{len(cv_paths)}...")
@@ -199,6 +230,54 @@ while True:
                     
                     # Trace the contour smoothly
                     current_joint_angles = follow_path(path, current_joint_angles)
+                    update_progress(i) 
+        
+        elif cmd == 'r':
+            print("Loading previous session from log file...")
+            try:
+                session = load_session()
+            except FileNotFoundError:
+                print(f"No log file found at {LOG_FILE}. Nothing to recover.")
+                continue
+
+            saved_zero = session["zero_ticks"]
+            strokes = session["strokes"]
+            last_completed = session["last_completed_stroke"]
+
+            print(f"Recovered zero ticks: {saved_zero}")
+            print(f"Resuming after stroke index {last_completed} (of {len(strokes)-1})")
+
+            # Overwrite this session's calibrated zero with the recovered one
+            zero_ticks = saved_zero
+            # Recompute safety limits around the recovered zero so clamping stays consistent
+            max_ticks = []
+            min_ticks = []
+            for i, dxl_id in enumerate(DXL_IDs):
+                max_ticks.append(zero_ticks[i] + REL_LIMIT_1[i])
+                min_ticks.append(zero_ticks[i] + REL_LIMIT_2[i])
+
+            for i, dxl_id in enumerate(DXL_IDs):
+                write_signed_position(dxl_id, zero_ticks[i])
+            current_joint_angles = [0.0, 0.0, 0.0]
+            time.sleep(1)
+
+            for i in range(last_completed + 1, len(strokes)):
+                path = strokes[i]
+                print(f"Executing stroke {i+1}/{len(strokes)}...")
+
+                start_x, start_y = path[0]
+                pen_controller.pen_up()
+                time.sleep(1)
+                current_joint_angles = go_to_xy_3dof(start_x, start_y, current_joint_angles)
+                time.sleep(1)
+                pen_controller.pen_down()
+                time.sleep(1)
+
+                current_joint_angles = follow_path(path, current_joint_angles)
+                update_progress(i)
+
+            print("Recovery drawing complete.")
+
 
                 
     except (KeyboardInterrupt, Exception) as e:

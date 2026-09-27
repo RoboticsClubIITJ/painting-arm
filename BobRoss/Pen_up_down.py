@@ -20,7 +20,6 @@ import cv2
 import scipy.signal as signal
 import serial
 import time
-
 from Configurations import (
     MAX_REACH, MAX_LINEAR_SPEED, MAX_JOINT_VEL, DT, FPS, REVIEW_WINDOW, 
     TRAVEL_SPEED_MULT, PAUSE_DURATION, SG_WINDOW_LENGTH,
@@ -29,12 +28,12 @@ from Configurations import (
 )
 from Kinematics import FK, arm_link_positions, clip_to_joint_limits
 from Trajectory import generate_continuous_trajectory
-from Vision import image_to_robot_paths
+from cv import image_to_robot_paths
 # from dynamixel_controller import DynamixelArm   # <-- NAYA
 
 # ---- NAYA: Arduino Nano Pen Controller Class ----
 class NanoPenController:
-    def __init__(self, port='COM7', baud_rate=9600):
+    def __init__(self, port='/dev/ttyUSB0', baud_rate=9600):
         self.ser = None
         try:
             self.ser = serial.Serial(port, baud_rate, timeout=1)
@@ -90,7 +89,7 @@ class Planar3DOFSimApp:
         #     print(f"[HARDWARE] Dynamixel arm connect nahi hui, sim-only mode: {e}")
 
         # ---- NAYA: hardware nano pen connect karo ----
-        self.nano_pen = NanoPenController(port='COM10', baud_rate=9600) # Update COM port as needed
+        self.nano_pen = NanoPenController(port='/dev/ttyUSB0', baud_rate=9600) # Update COM port as needed
         self.current_hw_pen_state = 'UP' # Default starting state
 
         self.setup_gui()
