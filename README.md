@@ -108,7 +108,7 @@ python -m pip install numpy scipy opencv-python matplotlib Pillow pyserial dynam
 
 Run from repository root unless noted. Executing a `BobRoss` script adds its containing directory to Python’s import path, allowing sibling imports.
 Connect Ethernet cable between laptop and Raspberry Pi. 
-Ensure IPv4 settings are set to Manual in laptop
+Ensure IPv4 settings for wired connection is set to Link-Local Only in laptop
 ### Initalising Workflow
 
 ```bash
