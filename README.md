@@ -112,7 +112,7 @@ Ensure IPv4 settings for wired connection is set to Link-Local Only in laptop
 ### Initalising Workflow
 
 ```bash
-ssh rocket@169.254.225.250 
+ssh -X rocket@169.254.225.250 
 ```
 
 Once the dependecies are installed perform this specfic set of commands to make it ready for ssh on Raspi as setup already done in it
