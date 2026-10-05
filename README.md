@@ -107,11 +107,12 @@ python -m pip install numpy scipy opencv-python matplotlib Pillow pyserial dynam
 ## How to run
 
 Run from repository root unless noted. Executing a `BobRoss` script adds its containing directory to Python’s import path, allowing sibling imports.
-
+Connect Ethernet cable between laptop and Raspberry Pi. 
+Ensure IPv4 settings are set to Manual in laptop
 ### Initalising Workflow
 
 ```bash
-ssh rocket@IP  # currently the IP is 172.31.45.138 but we need to make it either static or we can se Ethernet cable
+ssh rocket@169.254.225.250 
 ```
 
 Once the dependecies are installed perform this specfic set of commands to make it ready for ssh on Raspi as setup already done in it
