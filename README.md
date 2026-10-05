@@ -1,4 +1,4 @@
-# Bob Ross without ROS
+<img width="1234" height="688" alt="image" src="https://github.com/user-attachments/assets/2afa6884-46f0-43c2-bb5a-92ff75d96a3f" /># Bob Ross without ROS
 
 Bob Ross without ROS is an image-to-drawing pipeline for a three-link, planar (3-DoF) robotic arm. It converts an image into outline and hatch strokes, maps them into a physical canvas workspace, solves inverse kinematics (IK), produces joint-limited trajectories, and can command Dynamixel servos. Tkinter/Matplotlib interfaces support previewing and simulating drawings.
 
@@ -136,7 +136,13 @@ source BobRoss.sh
 ### Calibrate and draw with hardware
 
 Review serial ports, IDs, inversion flags, relative tick limits, physical link lengths, and canvas mapping first.
+Send a picture to the Raspberry PI with the following command in a new terminal
 
+```bash
+scp Pictures/picture.jpeg rocket@169.254.225.250:/home/rocket/Desktop/BOB/Bob_Ross/BobRoss/ 
+```
+
+then run in SSH
 ```bash
 python3 Calibration.py
 ```
