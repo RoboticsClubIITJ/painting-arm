@@ -32,18 +32,37 @@ The project goal is to reproduce two-dimensional image contours with geometrical
 
 ```text
 .
-├── painting-arm                  # Standalone/legacy image-to-simulation program
+├── painting-arm                # Standalone/legacy image-to-simulation program
 ├── BobRoss/
-│   ├── Calibration.py            # Interactive hardware calibration and drawing runner
-│   ├── Configurations.py         # Shared arm, motion, vision, and canvas constants
-│   ├── Kinematics.py             # FK, Jacobian, and DLS IK
-│   ├── Trajectory.py             # Continuous joint-limited trajectory planner
-│   ├── cv.py                     # XDoG image-to-robot-path pipeline
-│   ├── gui.py                    # Path-selection GUI used by the hardware runner
-│   ├── Pen_up_down.py            # Integrated simulator and Nano pen controller
-│   └── logs/current_drawing.json # Runtime recovery state
-├── GradientDescentBasedIK.pdf    # IK reference material
-├── .vscode/settings.json         # VS Code Python environment preference
+│   ├── Calibration.py          # Interactive hardware calibration and drawing runner
+│   ├── Configurations.py       # Shared arm, motion, vision, and canvas constants
+│   ├── cv.py                   # XDoG image-to-robot-path pipeline
+│   ├── gui.py                  # Path-selection GUI used by the hardware runner
+│   ├── Kinematics.py           # FK, Jacobian, and DLS IK
+│   ├── logs
+│   │   └── current_drawing.json    # Runtime recovery state
+│   ├── Pen_up_down.py          # Integrated simulator and Nano pen controller
+│   └── Trajectory.py           # Continuous joint-limited trajectory planner
+├── CAD Model
+│   ├── BoBRoss Assembly.f3z
+│   ├── BoBRoss Assembly.step
+│   └── Printables
+│       ├── base2.stl
+│       ├── end effector.stl
+│       ├── link1.stl
+│       ├── link2p1.stl
+│       ├── link2p2.stl
+│       ├── link3p1.stl
+│       ├── link3p2.stl
+│       ├── servo head.stl
+│       └── Servo_head_xm430.stl
+├── code_summarizer.md
+├── Comparison
+│   ├── GUI.png
+│   ├── Original.png
+│   └── Result.png
+├── Documentation.pdf
+├── GradientDescentBasedIK.pdf
 └── README.md
 ```
 
@@ -323,11 +342,9 @@ Useful breakpoints/log points: `cv.py` (`binary_image`, path counts, mapped path
 5. Keep the pen lifted during travel/errors and verify the Nano mechanical action.
 6. Add numerical/image tests before changing IK or planner tuning; assert that planned points remain reachable and within limits.
 7. Do not import `Calibration.py` as a library: import triggers port opening, calibration, and an interactive loop.
-8. A production-quality next step is an entry-point guard around the hardware runner, pinned dependencies, Arduino/wiring/CAD artifacts, and tests/CI.
 
 ## Current limitations
 
 - No package installer, requirements lockfile, automated tests, or CI.
-- No Arduino firmware, wiring diagram, BOM, CAD, or active Dynamixel wrapper for the integrated simulator is committed.
 - `Calibration.py` is Linux-device-name specific and executes hardware setup at import time.
 - `gui.py` slider defaults are local rather than sourced from `Configurations.py`.
